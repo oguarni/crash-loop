@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.vite/
+
+# Logs & OS cruft
+*.log
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Local tooling (keep out of history)
+.claude/
+.claudeignore
+CLAUDE.md
+
+# Generation scratch & heavy art assets (not used by the build)
+backup/
+imgs/

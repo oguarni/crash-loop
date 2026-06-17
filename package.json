@@ -1,0 +1,18 @@
+{
+  "name": "crash-loop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A 2D infrastructure & automation puzzle. Compose a cloud topology that survives simulated traffic within an error budget.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test:sim": "esbuild scripts/sim-check.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/sim-check.mjs && node node_modules/.cache/sim-check.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

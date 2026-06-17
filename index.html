@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>crash-loop</title>
+    <link rel="icon" href="data:," />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: #0b1020;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        font-family: "IBM Plex Mono", ui-monospace, "Courier New", monospace;
+      }
+      #app {
+        width: 960px;
+        max-width: 100vw;
+      }
+      canvas {
+        display: block;
+        width: 960px;
+        height: 600px;
+        max-width: 100vw;
+        box-shadow: 0 0 0 1px #3a3d45, 0 30px 80px rgba(0, 0, 0, 0.6);
+      }
+      .hint {
+        color: #7cffb2;
+        opacity: 0.55;
+        font-size: 12px;
+        letter-spacing: 0.02em;
+        text-align: center;
+        margin-top: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="screen" width="960" height="600"></canvas>
+      <div class="hint">
+        crash-loop · pick a component, click to place, wire from ingress, then
+        Run
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
