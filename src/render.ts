@@ -2,6 +2,8 @@ import type { GameNode, NodeKind, SimTick } from './types';
 import type { Game, Tool } from './game';
 import { NODE_SPECS } from './sim/nodes';
 import { palette, tint } from './palette';
+import { type GameImages, ready } from './images';
+import { isMuted } from './audio';
 import {
   HUD_H,
   NODE_H,
@@ -17,6 +19,9 @@ import {
 } from './layout';
 
 const MONO = "'IBM Plex Mono', ui-monospace, 'Courier New', monospace";
+
+// Wall-clock ms when the boot screen first drew, used for its one-time intro.
+let titleT0 = 0;
 
 function font(size: number, weight = 500): string {
   return `${weight} ${size}px ${MONO}`;
@@ -61,7 +66,7 @@ export function layoutRail(game: Game): RailItem[] {
   return items;
 }
 
-export type ButtonId = 'clear' | 'run' | 'back' | 'skip' | 'next';
+export type ButtonId = 'clear' | 'run' | 'back' | 'skip' | 'next' | 'pause';
 
 export interface Button {
   id: ButtonId;
@@ -84,6 +89,7 @@ export function layoutButtons(game: Game): Button[] {
     defs.push({ id: 'clear', label: 'Clear', enabled: dirty, primary: false });
     defs.push({ id: 'run', label: 'Run >', enabled: !game.overBudget(), primary: true });
   } else if (game.mode === 'running') {
+    defs.push({ id: 'pause', label: game.paused ? 'Resume' : 'Pause', enabled: true, primary: false });
     defs.push({ id: 'skip', label: 'Skip >>', enabled: true, primary: true });
   } else {
     defs.push({ id: 'clear', label: 'Clear', enabled: true, primary: false });
@@ -99,6 +105,11 @@ export function layoutButtons(game: Game): Button[] {
     x += w + gap;
     return button;
   });
+}
+
+/** Sound on/off toggle, in the rail's free space above the HUD (also the M key). */
+export function layoutMuteButton(): Rect {
+  return { x: 12, y: WORK_BOTTOM - 30, w: RAIL_W - 24, h: 20 };
 }
 
 // --- small canvas helpers ------------------------------------------------------
@@ -141,17 +152,67 @@ function displayTick(game: Game): SimTick | null {
   return null;
 }
 
+// --- animation helpers ---------------------------------------------------------
+
+/** Overshooting ease, for the node placement pop. */
+function easeOutBack(p: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+}
+
+/** Stable 0..1 hash of a node id, so each node's sparks animate out of phase. */
+function hashId(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return (h % 997) / 997;
+}
+
+/** Dots travelling along an active edge, visualising request flow. */
+function drawPackets(ctx: Ctx, p1: Point, p2: Point, load: number, color: string, time: number): void {
+  const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  if (len < 8) return;
+  const count = Math.max(1, Math.min(5, Math.round(load / 8)));
+  const spacing = 1 / count;
+  const speed = 100; // px/sec
+  const head = ((time / 1000) * speed) / len;
+  ctx.fillStyle = color;
+  for (let i = 0; i < count; i++) {
+    const f = (head + i * spacing) % 1;
+    ctx.beginPath();
+    ctx.arc(p1.x + (p2.x - p1.x) * f, p1.y + (p2.y - p1.y) * f, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** Amber flecks falling from an overloaded node — the dropped requests. */
+function drawDropSparks(ctx: Ctx, node: GameNode, time: number): void {
+  const seed = hashId(node.id);
+  ctx.fillStyle = palette.amber;
+  for (let i = 0; i < 3; i++) {
+    const phase = ((time / 680) + i * 0.34 + seed) % 1;
+    const x = node.x + (i - 1) * 13 + Math.sin((seed + i) * 9) * 4;
+    const y = node.y + NODE_H / 2 + phase * 22;
+    ctx.globalAlpha = (1 - phase) * 0.85;
+    ctx.fillRect(x - 1, y, 2, 4);
+  }
+  ctx.globalAlpha = 1;
+}
+
 // --- main draw -----------------------------------------------------------------
 
-export function draw(ctx: Ctx, game: Game, mouse: Point, time: number): void {
+// `flowTime` is a clock that only advances while a run is playing and unpaused,
+// so request packets and edge dashes literally freeze when the player pauses.
+// `time` stays wall-clock for UI motion (pop-ins, fades, the blinking caret).
+export function draw(ctx: Ctx, game: Game, mouse: Point, time: number, imgs: GameImages, flowTime: number = time): void {
   ctx.fillStyle = palette.navy;
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
   drawScanlines(ctx);
-  drawWorkArea(ctx, game, mouse, time);
-  drawRail(ctx, game);
+  drawWorkArea(ctx, game, mouse, time, flowTime);
+  drawRail(ctx, game, imgs);
   drawHud(ctx, game);
-  if (game.mode === 'result' && game.result) drawResultBanner(ctx, game);
+  if (game.mode === 'result' && game.result) drawResultBanner(ctx, game, time);
 }
 
 function drawScanlines(ctx: Ctx): void {
@@ -159,7 +220,7 @@ function drawScanlines(ctx: Ctx): void {
   for (let y = 0; y < VIEW_H; y += 4) ctx.fillRect(0, y, VIEW_W, 1);
 }
 
-function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number): void {
+function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number, flowTime: number): void {
   ctx.save();
   ctx.beginPath();
   ctx.rect(WORK_LEFT, WORK_TOP, VIEW_W - WORK_LEFT, WORK_BOTTOM - WORK_TOP);
@@ -186,10 +247,30 @@ function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number): void {
   label(ctx, `hint: ${game.level.hint}`, WORK_LEFT + 16, WORK_BOTTOM - 14, tint.greenDim, 11, 400);
 
   const tick = displayTick(game);
-  drawEdges(ctx, game, tick, time);
+  drawEdges(ctx, game, tick, flowTime);
   drawWirePreview(ctx, game, mouse);
-  drawNodes(ctx, game, tick);
+  drawNodes(ctx, game, tick, time, flowTime);
+  if (game.mode === 'running' && game.paused) drawPausedOverlay(ctx);
 
+  ctx.restore();
+}
+
+/** A centred chip that makes a paused run unmistakable. */
+function drawPausedOverlay(ctx: Ctx): void {
+  const w = 176;
+  const h = 30;
+  const x = (WORK_LEFT + VIEW_W) / 2 - w / 2;
+  const y = WORK_TOP + 42;
+  ctx.save();
+  ctx.fillStyle = 'rgba(11, 16, 32, 0.85)';
+  rrect(ctx, { x, y, w, h }, 8);
+  ctx.fill();
+  ctx.strokeStyle = palette.amber;
+  ctx.lineWidth = 1.3;
+  rrect(ctx, { x, y, w, h }, 8);
+  ctx.stroke();
+  label(ctx, '|| paused', x + 14, y + 20, palette.amber, 13, 700);
+  label(ctx, 'Space resumes', x + w - 12, y + 20, tint.boneDim, 10, 500, 'right');
   ctx.restore();
 }
 
@@ -197,7 +278,7 @@ function nodeById(game: Game, id: string): GameNode | undefined {
   return game.nodes.find((n) => n.id === id);
 }
 
-function drawEdges(ctx: Ctx, game: Game, tick: SimTick | null, time: number): void {
+function drawEdges(ctx: Ctx, game: Game, tick: SimTick | null, flowTime: number): void {
   for (const e of game.edges) {
     const a = nodeById(game, e.from);
     const b = nodeById(game, e.to);
@@ -213,7 +294,7 @@ function drawEdges(ctx: Ctx, game: Game, tick: SimTick | null, time: number): vo
     ctx.lineWidth = active ? 2.5 : 1.5;
     if (active) {
       ctx.setLineDash([6, 6]);
-      ctx.lineDashOffset = -(time / 24) % 12;
+      ctx.lineDashOffset = -(flowTime / 24) % 12;
     } else {
       ctx.setLineDash([]);
     }
@@ -226,6 +307,7 @@ function drawEdges(ctx: Ctx, game: Game, tick: SimTick | null, time: number): vo
     drawArrow(ctx, p1, p2, color);
 
     if (active) {
+      drawPackets(ctx, p1, p2, load, color, flowTime);
       const mx = (p1.x + p2.x) / 2;
       const my = (p1.y + p2.y) / 2;
       label(ctx, String(load), mx, my - 6, color, 10, 600, 'center');
@@ -271,7 +353,7 @@ function nodeStat(game: Game, node: GameNode, tick: SimTick | null): string {
   return `cap ${spec.capacity}`;
 }
 
-function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null): void {
+function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flowTime: number): void {
   for (const node of game.nodes) {
     const spec = NODE_SPECS[node.kind];
     const r: Rect = { x: node.x - NODE_W / 2, y: node.y - NODE_H / 2, w: NODE_W, h: NODE_H };
@@ -286,6 +368,28 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null): void {
     else if (isSelected) border = palette.bone;
     else if (isHover) border = palette.green;
 
+    // placement pop-in: scale from 0.6 with a slight overshoot over ~180ms
+    const pop = node.bornAt ? Math.min(1, (time - node.bornAt) / 180) : 1;
+    ctx.save();
+    if (pop < 1) {
+      const s = 0.6 + 0.4 * easeOutBack(pop);
+      ctx.translate(node.x, node.y);
+      ctx.scale(s, s);
+      ctx.translate(-node.x, -node.y);
+    }
+
+    // pulsing amber halo while the node is shedding traffic
+    if (overloaded) {
+      const pulse = 0.5 + 0.5 * Math.sin(time / 110);
+      ctx.save();
+      ctx.globalAlpha = 0.2 + 0.4 * pulse;
+      ctx.strokeStyle = palette.amber;
+      ctx.lineWidth = 2 + 2.5 * pulse;
+      rrect(ctx, { x: r.x - 3, y: r.y - 3, w: r.w + 6, h: r.h + 6 }, 9);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     ctx.fillStyle = tint.node;
     rrect(ctx, r, 7);
     ctx.fill();
@@ -297,12 +401,16 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null): void {
     const titleColor = overloaded ? palette.amber : palette.bone;
     label(ctx, `${spec.glyph} ${spec.label}`, node.x, node.y - 4, titleColor, 12, 600, 'center');
     label(ctx, nodeStat(game, node, tick), node.x, node.y + 13, overloaded ? palette.amber : tint.greenDim, 11, 500, 'center');
+
+    ctx.restore();
+
+    if (overloaded) drawDropSparks(ctx, node, flowTime);
   }
 }
 
 // --- rail ----------------------------------------------------------------------
 
-function drawRail(ctx: Ctx, game: Game): void {
+function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   ctx.fillStyle = tint.panel;
   ctx.fillRect(0, 0, RAIL_W, VIEW_H);
   ctx.strokeStyle = palette.charcoal;
@@ -312,8 +420,19 @@ function drawRail(ctx: Ctx, game: Game): void {
   ctx.lineTo(RAIL_W + 0.5, VIEW_H);
   ctx.stroke();
 
-  label(ctx, 'crash-loop', 14, 32, palette.green, 18, 700);
-  label(ctx, `${game.level.id} · ${game.level.name}`, 14, 52, tint.boneDim, 11, 500);
+  const badge = 26;
+  const textX = ready(imgs.icon) ? 14 + badge + 9 : 14;
+  if (ready(imgs.icon)) ctx.drawImage(imgs.icon, 14, 13, badge, badge);
+  label(ctx, 'crash-loop', textX, 30, palette.green, 17, 700);
+  label(ctx, `${game.level.id} · ${game.level.name}`, textX, 48, tint.boneDim, 11, 500);
+
+  // saved best for this level, shown when replaying a cleared scenario
+  const rec = game.savedRecord;
+  if (rec && rec.tier !== 'none') {
+    const col = rec.tier === 'gold' ? palette.amber : palette.green;
+    label(ctx, '*', 14, 64, col, 11, 700);
+    label(ctx, `best ${rec.tier}${rec.bestCost != null ? ` $${rec.bestCost.toFixed(2)}` : ''}`, 26, 64, tint.boneDim, 10, 500);
+  }
 
   const items = layoutRail(game);
   const firstComp = items.find((i) => isNodeKind(i.tool));
@@ -343,6 +462,17 @@ function drawRail(ctx: Ctx, game: Game): void {
       label(ctx, `cpu ${spec.cpu} · mem ${spec.mem}`, item.rect.x + 40, item.rect.y + 37, tint.greenDim, 10, 400);
     }
   }
+
+  // sound toggle, pinned to the rail footer
+  const mb = layoutMuteButton();
+  const on = !isMuted();
+  ctx.strokeStyle = tint.charcoalDim;
+  ctx.lineWidth = 1;
+  rrect(ctx, mb, 5);
+  ctx.stroke();
+  label(ctx, on ? '[*]' : '[ ]', mb.x + 10, mb.y + 14, on ? palette.green : tint.boneDim, 11, 700);
+  label(ctx, on ? 'sound on' : 'sound off', mb.x + 38, mb.y + 14, tint.boneDim, 11, 500);
+  label(ctx, 'M', mb.x + mb.w - 10, mb.y + 14, tint.greenDim, 10, 600, 'right');
 }
 
 // --- hud -----------------------------------------------------------------------
@@ -396,8 +526,8 @@ function drawHud(ctx: Ctx, game: Game): void {
     statusColor = game.overBudget() ? tint.red : tint.boneDim;
   } else if (game.mode === 'running') {
     const tickN = Math.min(game.playhead, game.level.traffic.length);
-    status = `running · tick ${tickN}/${game.level.traffic.length}`;
-    statusColor = palette.green;
+    status = `${game.paused ? 'paused' : 'running'} · tick ${tickN}/${game.level.traffic.length}`;
+    statusColor = game.paused ? palette.amber : palette.green;
   } else if (game.result) {
     status = game.result.gold ? 'GOLD' : game.result.passed ? 'PASS' : 'FAIL';
     statusColor = game.result.passed ? palette.green : tint.red;
@@ -427,13 +557,19 @@ function drawButtons(ctx: Ctx, buttons: Button[]): void {
 
 // --- result banner -------------------------------------------------------------
 
-function drawResultBanner(ctx: Ctx, game: Game): void {
+function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   const res = game.result;
   if (!res) return;
   const w = 560;
-  const h = 132;
+  const h = 152;
   const x = WORK_LEFT + (VIEW_W - WORK_LEFT - w) / 2;
-  const y = (WORK_BOTTOM - h) / 2;
+
+  // fade up and slide in over ~220ms
+  const t = Math.min(1, game.resultAt ? (time - game.resultAt) / 220 : 1);
+  const ease = 1 - Math.pow(1 - t, 3);
+  ctx.save();
+  ctx.globalAlpha = ease;
+  const y = (WORK_BOTTOM - h) / 2 + (1 - ease) * 14;
 
   ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
   rrect(ctx, { x, y, w, h }, 10);
@@ -445,8 +581,171 @@ function drawResultBanner(ctx: Ctx, game: Game): void {
   ctx.stroke();
 
   const title = res.gold ? 'GOLD — error budget held' : res.passed ? 'PASS — error budget held' : 'FAIL';
-  label(ctx, title, x + 24, y + 38, accent, 18, 700);
-  label(ctx, res.message, x + 24, y + 68, palette.bone, 12, 500);
-  label(ctx, `served ${res.totalServed}   ·   dropped ${res.totalDropped} / ${res.errorBudget}   ·   cost $${res.cost.toFixed(2)} (par $${res.parCost.toFixed(2)})`, x + 24, y + 92, tint.boneDim, 11, 500);
-  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 114, tint.greenDim, 11, 400);
+  label(ctx, title, x + 24, y + 34, accent, 18, 700);
+
+  // "NEW BEST" chip when this run improved the saved record
+  if (game.newBest) {
+    ctx.font = font(18, 700);
+    const tw = ctx.measureText(title).width;
+    const chip: Rect = { x: x + 24 + tw + 14, y: y + 18, w: 92, h: 20 };
+    ctx.fillStyle = palette.green;
+    rrect(ctx, chip, 6);
+    ctx.fill();
+    label(ctx, 'NEW BEST', chip.x + chip.w / 2, chip.y + 14, palette.navy, 10, 700, 'center');
+  }
+
+  label(ctx, res.message, x + 24, y + 60, palette.bone, 12, 500);
+  label(ctx, `served ${res.totalServed}   ·   dropped ${res.totalDropped} / ${res.errorBudget}   ·   cost $${res.cost.toFixed(2)} (par $${res.parCost.toFixed(2)})`, x + 24, y + 82, tint.boneDim, 11, 500);
+
+  const rec = game.savedRecord;
+  const bestStr =
+    rec && rec.tier !== 'none'
+      ? `best: ${rec.tier.toUpperCase()}${rec.bestCost != null ? ` · $${rec.bestCost.toFixed(2)}` : ''}`
+      : 'best: — (first clear)';
+  label(ctx, bestStr, x + 24, y + 104, rec?.tier === 'gold' ? palette.amber : palette.green, 11, 600);
+
+  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 130, tint.greenDim, 11, 400);
+  ctx.restore();
+}
+
+// --- title / boot screen -------------------------------------------------------
+
+/** Draw `img` filling `r` while preserving aspect ratio (CSS object-fit: cover). */
+function drawCover(ctx: Ctx, img: HTMLImageElement, r: Rect): void {
+  const imgRatio = img.naturalWidth / img.naturalHeight;
+  const rectRatio = r.w / r.h;
+  let dw = r.w;
+  let dh = r.h;
+  if (imgRatio > rectRatio) dw = r.h * imgRatio;
+  else dh = r.w / imgRatio;
+  ctx.drawImage(img, r.x + (r.w - dw) / 2, r.y + (r.h - dh) / 2, dw, dh);
+}
+
+export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0, total = 0): void {
+  if (titleT0 === 0) titleT0 = time;
+  const elapsed = time - titleT0;
+
+  ctx.fillStyle = palette.navy;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  // faint full-board grid, matching the work area's texture
+  ctx.strokeStyle = tint.grid;
+  ctx.lineWidth = 1;
+  for (let x = 40; x < VIEW_W; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, VIEW_H);
+    ctx.stroke();
+  }
+  for (let y = 40; y < VIEW_H; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(VIEW_W, y);
+    ctx.stroke();
+  }
+  drawScanlines(ctx);
+
+  const lx = 386;
+
+  // hero (portrait + wordmark) fades and lifts in over the first ~500ms
+  const reveal = Math.min(1, elapsed / 500);
+  ctx.save();
+  ctx.globalAlpha = reveal;
+  ctx.translate(0, (1 - reveal) ** 3 * 12);
+
+  // on-call SRE portrait (the player) — framed like a node card
+  const card: Rect = { x: 110, y: 152, w: 224, h: 300 };
+  ctx.save();
+  rrect(ctx, card, 12);
+  ctx.fillStyle = tint.node;
+  ctx.fill();
+  ctx.clip();
+  if (ready(imgs.avatar)) drawCover(ctx, imgs.avatar, card);
+  ctx.restore();
+  ctx.strokeStyle = tint.greenDim;
+  ctx.lineWidth = 1.3;
+  rrect(ctx, card, 12);
+  ctx.stroke();
+
+  // status dot + caption beneath the card
+  const cx = card.x + card.w / 2;
+  ctx.fillStyle = palette.green;
+  ctx.beginPath();
+  ctx.arc(cx - 50, card.y + card.h + 18, 3, 0, Math.PI * 2);
+  ctx.fill();
+  label(ctx, 'on call: you', cx + 4, card.y + card.h + 22, tint.boneDim, 12, 600, 'center');
+
+  // wordmark
+  if (ready(imgs.logo)) {
+    const lw = 440;
+    const lh = (lw * imgs.logo.naturalHeight) / imgs.logo.naturalWidth;
+    ctx.drawImage(imgs.logo, lx, 150, lw, lh);
+  }
+  ctx.restore();
+
+  // faux boot log — lines print one at a time, like a real init sequence
+  const bootLines: Array<[string, string]> = [
+    ['[ ok ]', 'region us-merge-1 online'],
+    ['[ ok ]', 'error budget mounted'],
+    ['[ ok ]', 'pager routed — on call: you'],
+  ];
+  const linesStart = 420;
+  const lineGap = 200;
+  let ly = 372;
+  for (let i = 0; i < bootLines.length; i++) {
+    const appear = (elapsed - (linesStart + i * lineGap)) / 180;
+    if (appear > 0) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, appear);
+      const [tag, rest] = bootLines[i];
+      label(ctx, tag, lx, ly, palette.green, 12, 600);
+      ctx.font = font(12, 600);
+      ctx.textAlign = 'left';
+      const tagW = ctx.measureText(tag + '  ').width;
+      label(ctx, rest, lx + tagW, ly, tint.boneDim, 12, 500);
+      ctx.restore();
+    }
+    ly += 22;
+  }
+
+  // boot prompt with a blinking block caret — only after the log finishes
+  if (elapsed > linesStart + bootLines.length * lineGap) {
+    const py = 452;
+    const prompt = 'press ENTER to boot';
+    label(ctx, prompt, lx, py, palette.green, 16, 700);
+    ctx.font = font(16, 700);
+    ctx.textAlign = 'left';
+    const promptW = ctx.measureText(prompt + ' ').width;
+    if (Math.floor(time / 500) % 2 === 0) {
+      ctx.fillStyle = palette.green;
+      ctx.fillRect(lx + promptW, py - 13, 10, 16);
+    }
+    label(ctx, 'or click anywhere', lx, py + 22, tint.greenDim, 12, 400);
+  }
+
+  // saved progress, once the boot log has printed
+  if (total > 0 && elapsed > linesStart + bootLines.length * lineGap) {
+    label(ctx, `progress · ${cleared}/${total} regions stabilised`, VIEW_W / 2, 556, tint.greenDim, 11, 500, 'center');
+  }
+
+  // team credit
+  label(
+    ctx,
+    'Three-Way Merge — Gabriel Felipe Guarnieri · Hector Guarçoni Machado · Marcos Winícios Silva Martins',
+    VIEW_W / 2,
+    578,
+    tint.boneDim,
+    11,
+    500,
+    'center',
+  );
+
+  // CRT power-on flash, fading out over the first ~420ms
+  if (elapsed < 420) {
+    ctx.save();
+    ctx.globalAlpha = 0.16 * (1 - elapsed / 420);
+    ctx.fillStyle = palette.green;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.restore();
+  }
 }

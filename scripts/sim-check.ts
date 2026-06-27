@@ -3,6 +3,8 @@ import { simulate } from '../src/sim/engine';
 import { NODE_SPECS } from '../src/sim/nodes';
 import { L01 } from '../src/levels/L01';
 import { L02 } from '../src/levels/L02';
+import { Game } from '../src/game';
+import { mergeRecord } from '../src/progress';
 import type { Edge, GameNode } from '../src/types';
 
 let failures = 0;
@@ -107,6 +109,39 @@ const gateRule = { requireBeforeSinks: L02.requireBeforeSinks };
 {
   const cost = NODE_SPECS['load-balancer'].cost + 2 * NODE_SPECS.gate.cost + 4 * NODE_SPECS.service.cost;
   check('L02 par cost matches the gold build', Math.abs(cost - L02.parCost) < 1e-9, `cost=${cost} par=${L02.parCost}`);
+}
+
+// --- scoring: the record-merge rule (pure, persistence-free) -------------------
+
+// 10) a first clear records the tier and cost and counts as an improvement.
+{
+  const a = mergeRecord(null, { tier: 'pass', cost: 5, served: 900, dropped: 0 });
+  check('first pass records a best', a.record.tier === 'pass' && a.record.bestCost === 5 && a.improved, `tier=${a.record.tier} cost=${a.record.bestCost} improved=${a.improved}`);
+
+  // 11) reaching gold upgrades both the tier and the cost record.
+  const b = mergeRecord(a.record, { tier: 'gold', cost: 4.5, served: 900, dropped: 0 });
+  check('gold upgrades tier and cost', b.record.tier === 'gold' && b.record.bestCost === 4.5 && b.improved, `tier=${b.record.tier} cost=${b.record.bestCost}`);
+
+  // 12) a worse, more expensive run never regresses the saved record.
+  const c = mergeRecord(b.record, { tier: 'pass', cost: 6, served: 900, dropped: 0 });
+  check('a worse run never regresses', c.record.tier === 'gold' && c.record.bestCost === 4.5 && !c.improved, `tier=${c.record.tier} cost=${c.record.bestCost} improved=${c.improved}`);
+
+  // 13) a failed run leaves the level unsolved with no cost.
+  const d = mergeRecord(null, { tier: 'none', cost: 0, served: 0, dropped: 600 });
+  check('a failed run stays unsolved', d.record.tier === 'none' && d.record.bestCost === null && !d.improved, `tier=${d.record.tier} cost=${d.record.bestCost}`);
+}
+
+// --- collision: node placement / overlap rules ---------------------------------
+
+// 14) placing a node onto an existing one is blocked; open space succeeds.
+{
+  const g = new Game(L01);
+  const ing = g.nodes[0];
+  check('placing onto ingress is blocked', g.placeNode('service', ing.x, ing.y) === null, `nodes=${g.nodes.length}`);
+  const placed = g.placeNode('service', ing.x + 200, ing.y + 120);
+  check('placing in open space succeeds', placed !== null && g.nodes.length === 2, `placed=${placed?.id ?? 'null'} nodes=${g.nodes.length}`);
+  check('overlap is detected at an occupied slot', g.wouldOverlap(ing.x + 200, ing.y + 120) === true, 'expected overlap at the just-placed slot');
+  check('a distant slot reads as free', g.wouldOverlap(ing.x + 200, ing.y + 120 - 80) === false, 'expected free slot one node-height away');
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

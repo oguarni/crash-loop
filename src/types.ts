@@ -22,6 +22,7 @@ export interface GameNode {
   kind: NodeKind;
   x: number;
   y: number;
+  bornAt?: number; // cosmetic: wall-clock ms when placed, drives the pop-in animation
 }
 
 /** A directed connection carrying request flow from one node to another. */

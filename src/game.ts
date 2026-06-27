@@ -1,7 +1,8 @@
 import type { Budgets, Edge, GameNode, LevelSpec, NodeKind, SimResult } from './types';
+import type { LevelRecord } from './progress';
 import { NODE_SPECS } from './sim/nodes';
 import { simulate } from './sim/engine';
-import { distToSegment, pointInNode } from './layout';
+import { NODE_H, NODE_W, clampToWork, distToSegment, pointInNode } from './layout';
 
 export type Tool = 'move' | 'wire' | 'delete' | NodeKind;
 export type Mode = 'edit' | 'running' | 'result';
@@ -21,6 +22,11 @@ let seq = 0;
 function uid(prefix: string): string {
   seq += 1;
   return `${prefix}-${seq}`;
+}
+
+/** Wall-clock ms for cosmetic animations only — never feeds the simulation. */
+function nowMs(): number {
+  return typeof performance !== 'undefined' ? performance.now() : 0;
 }
 
 const EPS = 1e-9;
@@ -49,7 +55,14 @@ export class Game {
   // simulation playback
   sim: SimResult | null = null;
   playhead = 0; // number of ticks elapsed during running mode
+  paused = false; // freezes playback (and the flow visuals) without leaving running mode
   result: ResultSummary | null = null;
+  resultAt = 0; // cosmetic: wall-clock ms the result appeared, drives the banner fade-in
+
+  // persistent scoring — set by the host from progress storage, read by the
+  // renderer. Pure data: the simulation never consults either field.
+  savedRecord: LevelRecord | null = null;
+  newBest = false; // last result beat the saved record — drives the banner flourish
 
   constructor(level: LevelSpec, nextLevel: LevelSpec | null = null) {
     this.level = level;
@@ -69,7 +82,9 @@ export class Game {
     this.flash = null;
     this.sim = null;
     this.playhead = 0;
+    this.paused = false;
     this.result = null;
+    this.newBest = false;
   }
 
   /** Return to editing after a run, keeping the topology intact. */
@@ -78,6 +93,8 @@ export class Game {
     this.sim = null;
     this.result = null;
     this.playhead = 0;
+    this.paused = false;
+    this.newBest = false;
     this.wireFromId = null;
   }
 
@@ -113,9 +130,43 @@ export class Game {
   placeNode(kind: NodeKind, x: number, y: number): GameNode | null {
     if (this.mode !== 'edit') return null;
     if (!NODE_SPECS[kind].placeable) return null;
-    const node: GameNode = { id: uid(kind), kind, x, y };
+    if (this.wouldOverlap(x, y)) {
+      this.flash = "No room here — nodes can't overlap.";
+      return null;
+    }
+    const node: GameNode = { id: uid(kind), kind, x, y, bornAt: nowMs() };
     this.nodes.push(node);
     return node;
+  }
+
+  /** AABB collision: would a node box centred at (x, y) touch an existing one? */
+  wouldOverlap(x: number, y: number, ignoreId?: string): boolean {
+    const gutter = 8; // keep a small visible gap so boxes never kiss
+    return this.nodes.some(
+      (n) => n.id !== ignoreId && Math.abs(n.x - x) < NODE_W + gutter && Math.abs(n.y - y) < NODE_H + gutter,
+    );
+  }
+
+  /**
+   * After a drag, if the node landed on top of another, push it to the nearest
+   * free, in-bounds slot (a short outward spiral search). Returns true if moved.
+   */
+  resolveOverlap(id: string): boolean {
+    const node = this.nodes.find((n) => n.id === id);
+    if (!node || !this.wouldOverlap(node.x, node.y, id)) return false;
+    const step = 14;
+    for (let ring = 1; ring <= 28; ring++) {
+      for (let a = 0; a < 16; a++) {
+        const ang = (a / 16) * Math.PI * 2;
+        const p = clampToWork(node.x + Math.cos(ang) * ring * step, node.y + Math.sin(ang) * ring * step);
+        if (!this.wouldOverlap(p.x, p.y, id)) {
+          node.x = p.x;
+          node.y = p.y;
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   deleteNode(id: string): void {
@@ -202,12 +253,22 @@ export class Game {
         parCost: this.level.parCost,
         message: res.error ?? 'Simulation failed.',
       };
+      this.resultAt = nowMs();
       this.mode = 'result';
       return;
     }
     this.mode = 'running';
     this.playhead = 0;
+    this.paused = false;
+    this.newBest = false;
     this.wireFromId = null;
+  }
+
+  /** Freeze or resume playback during a run. No-op outside running mode. */
+  togglePause(): boolean {
+    if (this.mode !== 'running') return false;
+    this.paused = !this.paused;
+    return this.paused;
   }
 
   advancePlayback(stepTicks: number): void {
@@ -218,6 +279,7 @@ export class Game {
 
   skipToEnd(): void {
     if (this.mode !== 'running' || !this.sim) return;
+    this.paused = false;
     this.playhead = this.sim.ticks.length;
     this.finish();
   }
@@ -251,6 +313,7 @@ export class Game {
       parCost: this.level.parCost,
       message,
     };
+    this.resultAt = nowMs();
     this.mode = 'result';
   }
 

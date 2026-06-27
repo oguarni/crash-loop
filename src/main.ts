@@ -1,6 +1,9 @@
-import { Game } from './game';
+import { Game, type Mode } from './game';
 import type { ButtonId } from './render';
-import { draw, isNodeKind, layoutButtons, layoutRail } from './render';
+import { draw, drawTitle, isNodeKind, layoutButtons, layoutMuteButton, layoutRail } from './render';
+import { images } from './images';
+import * as audio from './audio';
+import * as progress from './progress';
 import { LEVELS } from './levels';
 import {
   RAIL_W,
@@ -24,9 +27,21 @@ canvas.height = VIEW_H * dpr;
 ctx.scale(dpr, dpr);
 
 let levelIndex = 0;
-const makeGame = (i: number): Game => new Game(LEVELS[i], LEVELS[i + 1] ?? null);
+const levelIds = LEVELS.map((l) => l.id);
+const makeGame = (i: number): Game => {
+  const g = new Game(LEVELS[i], LEVELS[i + 1] ?? null);
+  g.savedRecord = progress.recordFor(LEVELS[i].id); // load this level's saved best
+  return g;
+};
 let game = makeGame(levelIndex);
+// Cleared-level count for the title screen, sampled at load (the title only
+// shows before any play, so it never needs to update mid-session).
+const titleCleared = progress.clearedCount(levelIds);
 const mouse: Point = { x: 0, y: 0 };
+
+// The game opens on the boot/title screen; the first click or Enter starts L01.
+let booted = false;
+canvas.style.cursor = 'pointer';
 
 function toLogical(e: MouseEvent): Point {
   const rect = canvas!.getBoundingClientRect();
@@ -41,6 +56,7 @@ function handleButton(id: ButtonId): void {
   else if (id === 'clear') game.reset();
   else if (id === 'back') game.backToEdit();
   else if (id === 'skip') game.skipToEnd();
+  else if (id === 'pause') audio.sfx[game.togglePause() ? 'pause' : 'resume']();
   else if (id === 'next' && levelIndex < LEVELS.length - 1) {
     levelIndex += 1;
     game = makeGame(levelIndex);
@@ -48,12 +64,26 @@ function handleButton(id: ButtonId): void {
 }
 
 function onDown(p: Point): void {
+  if (!booted) {
+    booted = true;
+    audio.unlock();
+    audio.sfx.boot();
+    return;
+  }
   game.flash = null;
 
   // component / tool rail
   if (p.x <= RAIL_W) {
+    if (pointInRect(p.x, p.y, layoutMuteButton())) {
+      audio.toggleMuted();
+      return;
+    }
     const item = layoutRail(game).find((i) => pointInRect(p.x, p.y, i.rect));
-    if (item) game.setTool(item.tool);
+    if (item) {
+      const changed = game.tool !== item.tool;
+      game.setTool(item.tool);
+      if (changed) audio.sfx.tool();
+    }
     return;
   }
 
@@ -71,7 +101,7 @@ function onDown(p: Point): void {
   if (isNodeKind(game.tool)) {
     if (!node) {
       const pos = clampToWork(p.x, p.y);
-      game.placeNode(game.tool, pos.x, pos.y);
+      if (game.placeNode(game.tool, pos.x, pos.y)) audio.sfx.place();
     }
     return;
   }
@@ -90,10 +120,14 @@ function onDown(p: Point): void {
 
   if (game.tool === 'wire') {
     if (node) {
-      if (!game.wireFromId) game.wireFromId = node.id;
-      else {
-        game.connect(game.wireFromId, node.id);
+      if (!game.wireFromId) {
+        game.wireFromId = node.id;
+        audio.sfx.pick();
+      } else {
+        const ok = game.connect(game.wireFromId, node.id);
         game.wireFromId = null;
+        if (ok) audio.sfx.wire();
+        else audio.sfx.reject();
       }
     } else {
       game.wireFromId = null;
@@ -103,10 +137,15 @@ function onDown(p: Point): void {
 
   if (game.tool === 'delete') {
     if (node) {
+      const before = game.nodes.length;
       game.deleteNode(node.id);
+      if (game.nodes.length < before) audio.sfx.remove();
     } else {
       const edge = game.edgeAt(p.x, p.y);
-      if (edge) game.deleteEdge(edge.id);
+      if (edge) {
+        game.deleteEdge(edge.id);
+        audio.sfx.remove();
+      }
     }
   }
 }
@@ -114,6 +153,10 @@ function onDown(p: Point): void {
 function onMove(p: Point): void {
   mouse.x = p.x;
   mouse.y = p.y;
+  if (!booted) {
+    canvas!.style.cursor = 'pointer';
+    return;
+  }
 
   if (game.draggingId && game.mode === 'edit') {
     const n = game.nodes.find((node) => node.id === game.draggingId);
@@ -130,6 +173,8 @@ function onMove(p: Point): void {
 }
 
 function onUp(): void {
+  // a node dropped on top of another is nudged to the nearest free slot
+  if (game.draggingId) game.resolveOverlap(game.draggingId);
   game.draggingId = null;
 }
 
@@ -156,9 +201,23 @@ canvas.addEventListener('mousedown', (e) => onDown(toLogical(e)));
 canvas.addEventListener('mousemove', (e) => onMove(toLogical(e)));
 window.addEventListener('mouseup', onUp);
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
+  if (!booted) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      booted = true;
+      audio.unlock();
+      audio.sfx.boot();
+    }
+    return;
+  }
+  if (e.key === 'm' || e.key === 'M') {
+    audio.toggleMuted();
+  } else if (e.key === 'Escape') {
     game.wireFromId = null;
     game.selectedNodeId = null;
+  } else if ((e.key === 'p' || e.key === 'P' || e.key === ' ') && game.mode === 'running') {
+    e.preventDefault();
+    audio.sfx[game.togglePause() ? 'pause' : 'resume']();
   } else if (e.key === 'Enter' && game.mode === 'edit' && !game.overBudget()) {
     game.run();
   }
@@ -168,13 +227,29 @@ window.addEventListener('keydown', (e) => {
 const TICKS_PER_SEC = 14;
 let last = 0;
 let accumulator = 0;
+// flow clock: advances only while a run is playing and unpaused, so packets and
+// edge dashes freeze on pause. Cosmetic only — never feeds the deterministic sim.
+let flowTime = 0;
+
+// audio bookkeeping (cosmetic only — never feeds the deterministic sim)
+let prevMode: Mode = game.mode;
+let prevPlayhead = 0;
+let lastAlarm = 0;
 
 function frame(ts: number): void {
+  if (!booted) {
+    drawTitle(ctx!, images, ts, titleCleared, levelIds.length);
+    last = ts; // keep the first gameplay frame's dt sane
+    requestAnimationFrame(frame);
+    return;
+  }
+
   const dt = last ? (ts - last) / 1000 : 0;
   last = ts;
 
-  if (game.mode === 'running') {
+  if (game.mode === 'running' && !game.paused) {
     accumulator += dt * TICKS_PER_SEC;
+    flowTime += dt * 1000;
     if (accumulator >= 1) {
       const steps = Math.floor(accumulator);
       accumulator -= steps;
@@ -184,7 +259,41 @@ function frame(ts: number): void {
     accumulator = 0;
   }
 
-  draw(ctx!, game, mouse, ts);
+  // running feedback: a faint heartbeat every few ticks + an overload alarm
+  if (game.mode === 'running' && !game.paused) {
+    if (Math.floor(game.playhead / 5) !== Math.floor(prevPlayhead / 5)) audio.sfx.tick();
+    const tk = game.currentTick();
+    if (tk && tk.dropped > 0 && ts - lastAlarm > 150) {
+      audio.sfx.overload();
+      lastAlarm = ts;
+    }
+  }
+  prevPlayhead = game.playhead;
+
+  // stingers on state transitions: run start, and the pass / gold / fail verdict
+  if (game.mode !== prevMode) {
+    if (game.mode === 'running') audio.sfx.run();
+    else if (game.mode === 'result' && game.result) {
+      const r = game.result;
+      if (r.gold) audio.sfx.gold();
+      else if (r.passed) audio.sfx.pass();
+      else audio.sfx.fail();
+
+      // fold the verdict into persistent scoring, then surface the new best
+      const tier: progress.Tier = r.gold ? 'gold' : r.passed ? 'pass' : 'none';
+      const { record, improved } = progress.submit(game.level.id, {
+        tier,
+        cost: r.cost,
+        served: r.totalServed,
+        dropped: r.totalDropped,
+      });
+      game.savedRecord = record;
+      game.newBest = improved && tier !== 'none';
+    }
+    prevMode = game.mode;
+  }
+
+  draw(ctx!, game, mouse, ts, images, flowTime);
   requestAnimationFrame(frame);
 }
 

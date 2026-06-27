@@ -53,12 +53,22 @@ gold tier (`parCost`).
 |---------|-----|
 | Place   | Click a component in the left rail, then click an empty spot in the work area |
 | Wire    | Select **wire**, click the source node, then the target node |
-| Move    | Select **move**, drag a node |
+| Move    | Select **move**, drag a node — a node dropped on another is nudged to the nearest free slot |
 | Delete  | Select **delete**, click a node or an edge |
 | Run     | **Run >** (or `Enter`) — simulate the traffic profile and score it |
+| Pause   | **Pause** (or `Space` / `P`) freezes a running sim; **Resume** continues |
 | Cancel  | `Esc` cancels an in-progress wire |
 
 Clear a level and a **Next >** button appears on the result banner to advance.
+
+## Scoring & progress
+
+Each run is graded into a tier — **FAIL**, **PASS** (error budget held), or **GOLD**
+(also at or under `parCost`). The best tier and the lowest passing cost are kept
+per level in `localStorage`, so a cleared scenario shows its saved best on the
+result banner and in the rail, and a run that beats the record flags a **NEW
+BEST**. The title screen reports how many regions you've stabilised. Scoring is
+meta state only — it never feeds the deterministic simulation.
 
 ## L02 — "first deploy"
 
@@ -100,6 +110,7 @@ src/
     L02.ts          the "first deploy" level spec
     index.ts        level register (played in order)
   game.ts           board state, editing rules, run/playback (framework-agnostic)
+  progress.ts       persistent per-level scoring (localStorage, sim-independent)
   render.ts         all canvas drawing + shared hit-region layouts
   main.ts           DOM wiring, input, the playback loop
 ```
