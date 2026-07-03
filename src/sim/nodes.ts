@@ -64,4 +64,17 @@ export const NODE_SPECS: Record<NodeKind, NodeSpec> = {
     hitRate: 0.5, // serves ~half the reads locally, forwards the misses
     description: 'Serves ~50% of repeated reads locally; forwards the misses downstream.',
   },
+  queue: {
+    kind: 'queue',
+    label: 'queue',
+    glyph: '[>]',
+    cpu: 1,
+    mem: 2,
+    cost: 2.0,
+    capacity: 20, // drain rate: releases up to 20 req/tick downstream
+    buffer: 100, // buffer depth: holds up to 100 across ticks
+    placeable: true,
+    fanOut: true, // splits its released traffic evenly, like a load-balancer
+    description: 'Buffers traffic across ticks; drains 20 req/tick, sheds overflow when full.',
+  },
 };

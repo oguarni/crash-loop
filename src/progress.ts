@@ -1,27 +1,32 @@
-// Persistent per-level scoring. Each cleared level keeps its best tier and the
-// lowest passing cost (a golf-style metric, true to the Zachtronics lineage the
-// game cites). This is meta state only — it never feeds the deterministic
-// simulation. The merge rule is a pure function so it stays unit-testable, and
-// every localStorage touch is guarded so the Node sim-check bundle (and locked-
-// down iframes) degrade to a no-op instead of throwing.
+// Persistent per-level scoring. Multi-axis, in the Zachtronics lineage the game
+// cites (Opus Magnum: cost / cycles / area). Each axis keeps its own best,
+// tracked independently — you chase them separately, like separate leaderboards.
+// The FAIL/PASS/GOLD tier stays graded by the COST axis, so existing levels are
+// unaffected; cycles and coverage are additional per-axis records. This is meta
+// state only — it never feeds the deterministic simulation. Every localStorage
+// touch is guarded so the Node sim-check bundle degrades to a no-op.
 
 export type Tier = 'none' | 'pass' | 'gold';
 
 export interface RunOutcome {
   tier: Tier;
-  cost: number;
+  cost: number; // lower is better
+  cycles?: number; // total latency (request-ticks in queues); lower is better
+  coverage?: number; // fraction of services behind a gate (0..1); higher is better
   served: number;
   dropped: number;
 }
 
 export interface LevelRecord {
   tier: Tier;
-  bestCost: number | null; // lowest passing cost; null until the level is first cleared
+  bestCost: number | null; // lowest passing cost; null until first cleared
+  bestCycles: number | null; // lowest passing latency
+  bestCoverage: number | null; // highest passing coverage
   served: number;
   dropped: number;
 }
 
-const KEY = 'crash-loop.progress.v1';
+const KEY = 'crash-loop.progress.v2';
 const EPS = 1e-9;
 const tierRank: Record<Tier, number> = { none: 0, pass: 1, gold: 2 };
 
@@ -31,10 +36,9 @@ function storage(): Storage | null {
   try {
     return typeof localStorage !== 'undefined' ? localStorage : null;
   } catch {
-    return null; // access itself can throw in sandboxed / privacy-mode contexts
+    return null;
   }
 }
-
 function readAll(): Store {
   const s = storage();
   if (!s) return {};
@@ -45,50 +49,56 @@ function readAll(): Store {
     return {};
   }
 }
-
 function writeAll(store: Store): void {
   const s = storage();
   if (!s) return;
   try {
     s.setItem(KEY, JSON.stringify(store));
   } catch {
-    /* quota exceeded / denied — best-effort persistence only */
+    /* quota / denied — best-effort */
   }
 }
 
 /**
- * Fold a finished run into the prior record, keeping the best tier reached and
- * the lowest passing cost. Pure: same inputs, same output. `improved` is true
- * when the run upgraded the tier or beat the cost record, so the UI can
- * celebrate a new best.
+ * Fold a finished run into the prior record, keeping the best per axis: lowest
+ * passing cost, lowest passing cycles, highest passing coverage, and the best
+ * tier reached. Pure. `improved` is true when any axis or the tier got better.
  */
 export function mergeRecord(prev: LevelRecord | null, run: RunOutcome): { record: LevelRecord; improved: boolean } {
   const record: LevelRecord = prev
     ? { ...prev }
-    : { tier: 'none', bestCost: null, served: 0, dropped: 0 };
+    : { tier: 'none', bestCost: null, bestCycles: null, bestCoverage: null, served: 0, dropped: 0 };
   let improved = false;
 
   if (tierRank[run.tier] > tierRank[record.tier]) {
     record.tier = run.tier;
     improved = true;
   }
-  // A passing run that costs less than the saved best is a better record, even
-  // at the same tier (cheaper gold beats pricier gold). Failed runs never count.
-  if (run.tier !== 'none' && (record.bestCost === null || run.cost < record.bestCost - EPS)) {
-    record.bestCost = run.cost;
-    record.served = run.served;
-    record.dropped = run.dropped;
-    improved = true;
+  // Only passing runs set records. Failed runs never count.
+  if (run.tier !== 'none') {
+    const cycles = run.cycles ?? 0;
+    const coverage = run.coverage ?? 0;
+    if (record.bestCost === null || run.cost < record.bestCost - EPS) {
+      record.bestCost = run.cost;
+      record.served = run.served;
+      record.dropped = run.dropped;
+      improved = true;
+    }
+    if (record.bestCycles === null || cycles < record.bestCycles - EPS) {
+      record.bestCycles = cycles;
+      improved = true;
+    }
+    if (record.bestCoverage === null || coverage > record.bestCoverage + EPS) {
+      record.bestCoverage = coverage;
+      improved = true;
+    }
   }
   return { record, improved };
 }
 
-/** Read the saved record for one level, or null if it has never been run. */
 export function recordFor(levelId: string): LevelRecord | null {
   return readAll()[levelId] ?? null;
 }
-
-/** Merge a run into storage and return the new record plus whether it improved. */
 export function submit(levelId: string, run: RunOutcome): { record: LevelRecord; improved: boolean } {
   const store = readAll();
   const { record, improved } = mergeRecord(store[levelId] ?? null, run);
@@ -96,8 +106,6 @@ export function submit(levelId: string, run: RunOutcome): { record: LevelRecord;
   writeAll(store);
   return { record, improved };
 }
-
-/** How many of the given levels have been cleared (tier above 'none'). */
 export function clearedCount(levelIds: string[]): number {
   const store = readAll();
   return levelIds.filter((id) => store[id] && store[id].tier !== 'none').length;

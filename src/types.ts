@@ -1,7 +1,8 @@
 // Shared domain types for the crash-loop simulation and editor.
 
-export type NodeKind = 'ingress' | 'load-balancer' | 'service' | 'gate' | 'cache';
-export interface ChaosSpec { seed: number; duration: number; windows: Array<[number, number]>; }
+export type NodeKind = 'ingress' | 'load-balancer' | 'service' | 'gate' | 'cache' | 'queue';
+// em SimResult:
+export interface SimResult { ok: boolean; error?: string; ticks: SimTick[]; totalArrived: number; totalServed: number; totalDropped: number; totalLatency: number; coverage: number; }
 
 /** Static, per-kind definition: cost, capacity, and editor metadata. */
 export interface NodeSpec {
@@ -15,6 +16,7 @@ export interface NodeSpec {
   // Fraction of throughput served locally (cache hits); the rest is forwarded
   // downstream as misses. Only defined for cache-kind nodes. Deterministic.
   hitRate?: number;
+  buffer?: number;
   placeable: boolean; // can the player place this from the component rail?
   fanOut: boolean; // does it split throughput across outgoing edges?
   description: string;
@@ -59,6 +61,8 @@ export interface LevelSpec {
   // e.g. ['gate'] forces all traffic through a deploy gate before production.
   requireBeforeSinks?: NodeKind[];
   chaos?: ChaosSpec;
+  parCycles?: number;   // target for the latency axis (lower is better)
+  parCoverage?: number; // target for the coverage axis (higher is better)
 }
 
 /** One simulated tick of traffic flowing through the topology. */
@@ -71,6 +75,7 @@ export interface SimTick {
   nodeInflow: Record<string, number>; // node id -> requests received this tick
   nodeOverload: Record<string, boolean>; // node id -> dropped traffic this tick
   downed?: string[];
+  buffered?: Record<string, number>;
 }
 
 export interface SimResult {

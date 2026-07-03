@@ -6,6 +6,7 @@ import { L02 } from '../src/levels/L02';
 import { L03 } from '../src/levels/L03';
 import { L04 } from '../src/levels/L04';
 import { L05 } from '../src/levels/L05';
+import { L06 } from '../src/levels/L06';
 import { Game } from '../src/game';
 import { mergeRecord } from '../src/progress';
 import type { Edge, GameNode } from '../src/types';
@@ -22,6 +23,7 @@ const svc = (id: string): GameNode => ({ id, kind: 'service', x: 0, y: 0 });
 const lb: GameNode = { id: 'lb', kind: 'load-balancer', x: 0, y: 0 };
 const gate = (id: string): GameNode => ({ id, kind: 'gate', x: 0, y: 0 });
 const cache = (id: string): GameNode => ({ id, kind: 'cache', x: 0, y: 0 });
+const queue = (id: string): GameNode => ({ id, kind: 'queue', x: 0, y: 0 });
 const edge = (from: string, to: string): Edge => ({ id: `${from}->${to}`, from, to });
 
 // 1) ingress -> single service: 30 in, 10 served, 20 dropped/tick.
@@ -294,6 +296,40 @@ const chaosOpts = { chaos: L05.chaos };
   const cost = NODE_SPECS['load-balancer'].cost + 4 * NODE_SPECS.service.cost;
   check('L05 par cost matches the gold build', Math.abs(cost - L05.parCost) < 1e-9, `cost=${cost} par=${L05.parCost}`);
 }
+
+// ===== L06 "back-pressure": the queue node (cross-tick buffering) =====
+ 
+// gold: queue + 2 services buffers the spike and drains it — zero drops.
+{
+  const nodes = [ingress, queue('q'), svc('s1'), svc('s2')];
+  const edges = [edge('ingress', 'q'), edge('q', 's1'), edge('q', 's2')];
+  const r = simulate(nodes, edges, L06.traffic);
+  check('L06 queue + 2 services drops nothing', r.totalDropped === 0, `dropped=${r.totalDropped}`);
+  check('L06 queue + 2 services serves everything', r.totalServed === r.totalArrived, `served=${r.totalServed} arrived=${r.totalArrived}`);
+  const peak = Math.max(...r.ticks.map((t) => t.buffered?.['q'] ?? 0));
+  const end = r.ticks[r.ticks.length - 1].buffered?.['q'] ?? 0;
+  check('L06 buffer peaks at 100 and drains to 0', peak === 100 && end === 0, `peak=${peak} end=${end}`);
+}
+ 
+// queue + 1 service can't keep up with its own drain — fails, and conservation holds.
+{
+  const nodes = [ingress, queue('q'), svc('s1')];
+  const edges = [edge('ingress', 'q'), edge('q', 's1')];
+  const r = simulate(nodes, edges, L06.traffic);
+  check('L06 queue + 1 service fails error budget', r.totalDropped > L06.errorBudget, `dropped=${r.totalDropped} budget=${L06.errorBudget}`);
+  check('L06 conservation holds with a queue', r.totalServed + r.totalDropped === r.totalArrived, `${r.totalServed}+${r.totalDropped}==${r.totalArrived}`);
+  const perTick = r.ticks.reduce((a, t) => a + t.dropped, 0);
+  check('L06 per-tick drops sum to total (leftover attributed)', perTick === r.totalDropped, `sum=${perTick} total=${r.totalDropped}`);
+}
+ 
+// peak provisioning is priced out; the queue build matches par.
+{
+  const peakCost = NODE_SPECS['load-balancer'].cost + 4 * NODE_SPECS.service.cost;
+  check('L06 peak provisioning (lb + 4 services) over budget', peakCost > L06.budgets.cost, `cost=${peakCost} budget=${L06.budgets.cost}`);
+  const gold = NODE_SPECS.queue.cost + 2 * NODE_SPECS.service.cost;
+  check('L06 par cost matches the gold build', Math.abs(gold - L06.parCost) < 1e-9, `cost=${gold} par=${L06.parCost}`);
+}
+
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 if (failures > 0) process.exit(1);

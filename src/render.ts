@@ -28,7 +28,7 @@ function font(size: number, weight = 500): string {
 }
 
 export function isNodeKind(t: Tool): t is NodeKind {
-  return t === 'ingress' || t === 'load-balancer' || t === 'service' || t === 'gate' || t === 'cache';
+  return t === 'ingress' || t === 'load-balancer' || t === 'service' || t === 'gate' || t === 'cache' || t === 'queue';
 }
 
 // --- hit-region layouts (shared by draw + input) -------------------------------
@@ -345,6 +345,14 @@ function drawWirePreview(ctx: Ctx, game: Game, mouse: Point): void {
 function nodeStat(game: Game, node: GameNode, tick: SimTick | null): string {
   const spec = NODE_SPECS[node.kind];
   const finite = Number.isFinite(spec.capacity);
+  // queue: surface how much it's holding (the buffer filling and draining)
+  if (node.kind === 'queue') {
+    if (tick) {
+      const held = tick.buffered?.[node.id] ?? 0;
+      return `${held} held · <=${spec.capacity}/t`;
+    }
+    return `hold ${spec.buffer} · <=${spec.capacity}/t`;
+  }
   if (tick) {
     const inflow = tick.nodeInflow[node.id] ?? 0;
     return finite ? `${inflow}/${spec.capacity}` : `${inflow} req`;
@@ -359,6 +367,7 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
     const r: Rect = { x: node.x - NODE_W / 2, y: node.y - NODE_H / 2, w: NODE_W, h: NODE_H };
     const downed = tick?.downed?.includes(node.id) ?? false;
     const overloaded = tick?.nodeOverload[node.id] ?? false;
+    const queuing = node.kind === 'queue' && (tick?.buffered?.[node.id] ?? 0) > 0 && !overloaded;
     const isWireFrom = game.wireFromId === node.id;
     const isHover = game.hoverNodeId === node.id;
     const isSelected = game.selectedNodeId === node.id;
@@ -415,7 +424,7 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
     if (downed) {
       label(ctx, '! down', node.x, node.y + 13, tint.red, 11, 700, 'center');
     } else {
-      label(ctx, nodeStat(game, node, tick), node.x, node.y + 13, overloaded ? palette.amber : tint.greenDim, 11, 500, 'center');
+      label(ctx, nodeStat(game, node, tick), node.x, node.y + 13, overloaded || queuing ? palette.amber : tint.greenDim, 11, 500, 'center');
     }
 
     ctx.restore();
@@ -619,7 +628,7 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   }
 
   label(ctx, res.message, x + 24, y + 60, palette.bone, 12, 500);
-  label(ctx, `served ${res.totalServed}   ·   dropped ${res.totalDropped} / ${res.errorBudget}   ·   cost $${res.cost.toFixed(2)} (par $${res.parCost.toFixed(2)})`, x + 24, y + 82, tint.boneDim, 11, 500);
+  label(ctx, `served ${res.totalServed}  ·  cost $${res.cost.toFixed(2)}  ·  cycles ${res.cycles}  ·  coverage ${Math.round(res.coverage * 100)}%`, x + 24, y + 82, tint.boneDim, 11, 500);
 
   const rec = game.savedRecord;
   const bestStr =

@@ -16,6 +16,8 @@ export interface ResultSummary {
   cost: number;
   parCost: number;
   message: string;
+  cycles: number;
+  coverage: number;
 }
 
 let seq = 0;
@@ -252,6 +254,8 @@ export class Game {
         errorBudget: this.level.errorBudget,
         cost: this.usage().cost,
         parCost: this.level.parCost,
+        cycles: 0,
+        coverage: 0,
         message: res.error ?? 'Simulation failed.',
       };
       this.resultAt = nowMs();
@@ -305,13 +309,14 @@ export class Game {
     }
 
     this.result = {
-      passed,
-      gold,
+      passed, gold,
       totalServed: this.sim.totalServed,
       totalDropped: this.sim.totalDropped,
       errorBudget: this.level.errorBudget,
       cost,
       parCost: this.level.parCost,
+      cycles: this.sim.totalLatency,
+      coverage: this.sim.coverage,
       message,
     };
     this.resultAt = nowMs();

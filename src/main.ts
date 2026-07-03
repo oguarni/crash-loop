@@ -284,6 +284,8 @@ function frame(ts: number): void {
       const { record, improved } = progress.submit(game.level.id, {
         tier,
         cost: r.cost,
+        cycles: r.cycles,
+        coverage: r.coverage,
         served: r.totalServed,
         dropped: r.totalDropped,
       });

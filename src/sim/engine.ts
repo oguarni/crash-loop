@@ -6,11 +6,18 @@ import { makeRng, randInt } from './rng';
 // (and, for chaos levels, the same seed) always yields the same result. No live
 // randomness, no wall-clock — a design pillar. Each tick, the level's arrival
 // rate is pushed from ingress and flows through the graph in topological order.
-// Fan-out nodes (ingress, load-balancer, gate) split throughput evenly across
-// their outgoing edges; cache nodes serve a fixed fraction locally and forward
-// the misses; service nodes are sinks that handle up to their capacity and drop
-// the overflow. On chaos levels, a seeded schedule knocks out individual service
-// nodes for a window of ticks (capacity -> 0), simulating a mid-run incident.
+//
+// Node behaviour is data-driven:
+//   - fan-out nodes (ingress, load-balancer, gate) route up to capacity and
+//     split throughput evenly across their outgoing edges;
+//   - a cache serves a fixed fraction locally (hits) and forwards the misses;
+//   - a queue buffers traffic ACROSS ticks (the one stateful node): it drains up
+//     to `capacity` per tick and sheds the overflow when its buffer is full
+//     (back-pressure);
+//   - a service is a sink: it handles up to capacity and drops the overflow.
+//
+// On chaos levels, a seeded schedule knocks out individual service nodes for a
+// window of ticks (capacity -> 0), simulating a mid-run incident.
 
 interface Graph {
   nodes: Map<string, GameNode>;
@@ -70,7 +77,7 @@ function splitEven(total: number, n: number): number[] {
 }
 
 function fail(error: string): SimResult {
-  return { ok: false, error, ticks: [], totalArrived: 0, totalServed: 0, totalDropped: 0 };
+  return { ok: false, error, ticks: [], totalArrived: 0, totalServed: 0, totalDropped: 0, totalLatency: 0, coverage: 0 };
 }
 
 /**
@@ -78,10 +85,10 @@ function fail(error: string): SimResult {
  * reach a sink (a non-fan-out node, e.g. a service), some traffic reaches that
  * sink without passing a required intermediary — an invalid topology.
  *
- * NOTE: a cache is fanOut:true, so it is not treated as a sink here even though
- * it serves some traffic locally. That is fine for the current levels; if a
- * future level ever combines requireBeforeSinks with a cache, revisit this so
- * cache hits before the required gate are not silently allowed.
+ * NOTE: cache and queue are fanOut:true, so they are not treated as sinks here
+ * even though a cache serves some traffic locally. That is fine for the current
+ * levels; if a future level combines requireBeforeSinks with one of them, revisit
+ * this so traffic terminating early is not silently allowed.
  */
 function sinkReachableWithout(graph: Graph, ingressId: string, blockKinds: Set<NodeKind>): boolean {
   const visited = new Set<string>();
@@ -102,16 +109,15 @@ function sinkReachableWithout(graph: Graph, ingressId: string, blockKinds: Set<N
 /**
  * Build the incident schedule from the seed. Each window is a [minStart,maxStart]
  * tick range for one incident; within it the seeded RNG fixes the exact start
- * tick and the victim service, which is knocked out for `duration` ticks. The
- * RNG is consumed in a fixed order (start, then victim, per incident), so the
- * schedule is a pure function of the seed and the service set. Returns a
- * tick -> Set(downed service ids) map.
+ * tick, and a deterministic shuffle assigns each incident a distinct victim
+ * service (knocked out for `duration` ticks). Pure function of the seed and the
+ * service set. Returns a tick -> Set(downed service ids) map.
  */
 function buildIncidentSchedule(order: string[], graph: Graph, traffic: number[], chaos: ChaosSpec): Map<number, Set<string>> {
   const downAt = new Map<number, Set<string>>();
   const sinks = order.filter((id) => {
     const spec = NODE_SPECS[graph.nodes.get(id)!.kind];
-    return !spec.fanOut && spec.hitRate == null; // true sinks: service nodes
+    return !spec.fanOut && spec.hitRate == null && spec.buffer == null; // true sinks: service nodes
   });
   if (sinks.length === 0) return downAt;
 
@@ -136,6 +142,40 @@ function buildIncidentSchedule(order: string[], graph: Graph, traffic: number[],
   return downAt;
 }
 
+/**
+ * Structural test coverage: the fraction of service nodes that sit behind a CI
+ * gate (every ingress -> service path passes a gate). A service reachable from
+ * ingress without crossing a gate is "untested". Pure function of the topology.
+ */
+function computeCoverage(graph: Graph, ingressId: string): number {
+  const services = [...graph.nodes.values()].filter((n) => {
+    const spec = NODE_SPECS[n.kind];
+    return !spec.fanOut && spec.hitRate == null && spec.buffer == null;
+  });
+  if (services.length === 0) return 0;
+  const visited = new Set<string>();
+  const ungated = new Set<string>();
+  const queue: string[] = [ingressId];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const spec = NODE_SPECS[graph.nodes.get(id)!.kind];
+    if (!spec.fanOut && spec.hitRate == null && spec.buffer == null) {
+      ungated.add(id); // a service reached without crossing a gate
+      continue;
+    }
+    for (const e of graph.outgoing.get(id)!) {
+      if (graph.nodes.get(e.to)!.kind === 'gate') {
+        visited.add(e.to); // don't traverse through gates — past them is tested
+        continue;
+      }
+      if (!visited.has(e.to)) queue.push(e.to);
+    }
+  }
+  return (services.length - ungated.size) / services.length;
+}
+
 export function simulate(
   nodes: GameNode[],
   edges: Edge[],
@@ -157,14 +197,17 @@ export function simulate(
     return fail('Untested traffic reached production — every service must sit behind a deploy gate.');
   }
 
-  // Precompute the seeded incident schedule once, before the tick loop, so it is
-  // independent of per-tick processing and fully reproducible.
+  // Precompute the seeded incident schedule once, before the tick loop.
   const downAt = opts.chaos ? buildIncidentSchedule(order, graph, traffic, opts.chaos) : null;
+
+  // Queue buffers persist across ticks — the only cross-tick state in the sim.
+  const held = new Map<string, number>();
 
   const ticks: SimTick[] = [];
   let totalArrived = 0;
   let totalServed = 0;
   let totalDropped = 0;
+  let totalLatency = 0;
 
   for (let t = 0; t < traffic.length; t++) {
     const arrival = traffic[t];
@@ -210,6 +253,32 @@ export function simulate(
             inflow.set(e.to, inflow.get(e.to)! + shares[i]);
           });
         }
+      } else if (spec.buffer != null) {
+        // queue: buffer across ticks. Take what is already held plus this tick's
+        // inflow, drain up to `capacity` downstream, keep the rest up to the
+        // buffer depth, and shed anything beyond that (back-pressure).
+        const available = (held.get(id) ?? 0) + received;
+        const release = Math.min(available, spec.capacity);
+        const afterRelease = available - release;
+        const keep = Math.min(afterRelease, spec.buffer);
+        const overflow = afterRelease - keep;
+        held.set(id, keep);
+        if (overflow > 0) {
+          dropped += overflow;
+          nodeOverload[id] = true;
+        }
+        if (outs.length === 0) {
+          if (release > 0) {
+            dropped += release;
+            nodeOverload[id] = true;
+          }
+        } else {
+          const shares = splitEven(release, outs.length);
+          outs.forEach((e, i) => {
+            edgeLoad[e.id] = shares[i];
+            inflow.set(e.to, inflow.get(e.to)! + shares[i]);
+          });
+        }
       } else if (spec.fanOut) {
         // ingress / load-balancer / gate: route up to capacity, then split.
         const throughput = Math.min(received, spec.capacity);
@@ -245,6 +314,14 @@ export function simulate(
       }
     }
 
+    // snapshot the queue buffers after this tick (for the renderer) and add
+    // this tick's total buffered to the latency (cycles) axis: each request held
+    // for a tick is one request-tick of waiting.
+    const buffered: Record<string, number> = {};
+    let tickBuffered = 0;
+    for (const [qid, v] of held) { buffered[qid] = v; tickBuffered += v; }
+    totalLatency += tickBuffered;
+
     totalArrived += arrival;
     totalServed += served;
     totalDropped += dropped;
@@ -257,8 +334,22 @@ export function simulate(
       nodeInflow,
       nodeOverload,
       downed: down ? [...down] : undefined,
+      buffered,
     });
   }
 
-  return { ok: true, ticks, totalArrived, totalServed, totalDropped };
+  // Requests still buffered when the run ends never got served — count them as
+  // dropped so conservation holds (served + dropped === arrived), attributed to
+  // the final tick, and flag the still-full queues as overloaded for the UI.
+  let leftover = 0;
+  for (const v of held.values()) leftover += v;
+  if (leftover > 0 && ticks.length > 0) {
+    const last = ticks[ticks.length - 1];
+    last.dropped += leftover;
+    for (const [id, v] of held) if (v > 0) last.nodeOverload[id] = true;
+    totalDropped += leftover;
+  }
+
+  const coverage = computeCoverage(graph, ingress.id);
+  return { ok: true, ticks, totalArrived, totalServed, totalDropped, totalLatency, coverage };
 }

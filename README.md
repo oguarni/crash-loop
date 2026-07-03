@@ -23,7 +23,7 @@ Other scripts:
 npm run build      # type-check (tsc --noEmit) + production bundle into dist/
 npm run preview    # serve the production build locally
 npm run typecheck  # type-check only
-npm run test:sim   # headless deterministic sim-check harness (L01–L05)
+npm run test:sim   # headless deterministic sim-check harness (L01–L06)
 ```
 
 ## L01 — "boot" (the first playable level)
@@ -141,7 +141,7 @@ shed 100 requests total, which sits inside the 120 error budget — at **$3.50**
 (gold). A safer lb + 3 services ($4.50) passes with only 50 drops but misses
 gold. The lesson: spend the error budget instead of overspending on capacity.
 
-## L05 — "chaos friday" (campaign boss)
+## L05 — "chaos friday"
 
 It's Friday and chaos is loose: replicas **crash mid-run, without warning**. A
 seeded schedule knocks out one service at a time (two incidents, five ticks
@@ -169,6 +169,33 @@ share (10 or ~7 per replica), so losing one blows the budget. Because the gold
 build is symmetric, *which* replica the seed picks never changes the outcome — so
 the run stays fully deterministic.
 
+## L06 — "back-pressure"
+
+The counterpoint to L04: instead of dropping a spike, you **buffer** it. This
+level introduces the **queue** — the one stateful node, whose buffer carries
+across ticks. Traffic sits at a steady 10 req/tick, spikes to **40 for five
+ticks**, then settles back, leaving room to drain.
+
+- A `queue` drains up to **20 req/tick** and holds up to **100** across ticks;
+  when the buffer is full it sheds the overflow (back-pressure). Like a cache, it
+  splits its released traffic evenly across downstream edges.
+- Budget caps you at **$5.00 / 6 CPU / 6 MEM**; the error budget is 20.
+- Peak provisioning (lb + 4 services = $5.50) is over budget — you must buffer,
+  not out-spend, the spike.
+
+The dominant correct topology:
+
+```
+ingress ──> queue ──┬──> service
+                    └──> service
+```
+
+The queue releases 20/tick and buffers the surplus (peaking at exactly 100 during
+the spike), then drains it over the calm tail. Two services (cap 20) match the
+drain rate, so nothing is dropped, at **$4.00** (gold). A single downstream
+service can't keep up with the queue's own drain and fails. Requests still
+buffered when the run ends count as dropped — you must drain in time.
+
 ## Architecture
 
 ```
@@ -177,7 +204,7 @@ src/
   palette.ts        canonical Three-Way Merge palette
   layout.ts         geometry constants + hit-testing helpers
   sim/
-    nodes.ts        per-kind specs (cost, capacity, fan-out, cache hit-rate)
+    nodes.ts        per-kind specs (cost, capacity, fan-out, cache hit-rate, queue buffer)
     rng.ts          deterministic seeded PRNG (mulberry32) for chaos
     engine.ts       deterministic per-tick topological flow simulation
   levels/
@@ -186,6 +213,7 @@ src/
     L03.ts          "flapping cart" — cache node
     L04.ts          "error budget"  — traffic spike, tight budget
     L05.ts          "chaos friday"  — seeded incident injection
+    L06.ts          "back-pressure" — queue node (cross-tick buffering)
     index.ts        level register (played in order)
   game.ts           board state, editing rules, run/playback (framework-agnostic)
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
@@ -204,22 +232,26 @@ scripts/
 - Traffic flows through the graph in **topological order** each tick; a cycle is
   rejected as an invalid topology (a real DAG constraint).
 - Node behaviour is data-driven: `fanOut` nodes split evenly, a `hitRate` node
-  (cache) serves a fraction and forwards the rest, and plain sinks (services)
+  (cache) serves a fraction and forwards the rest, a `buffer` node (queue) holds
+  traffic across ticks and drains at its capacity, and plain sinks (services)
   handle up to capacity and drop the overflow.
+- The **queue is the only stateful node**: its buffer persists between ticks.
+  Requests still held when the run ends are counted as dropped, so conservation
+  (`served + dropped === arrived`) always holds and a solution must drain in time.
 - `game.ts` holds no rendering or DOM code, so the rules are unit-testable and
   the renderer is replaceable.
 
 ## Roadmap
 
 **Shipped:** L01 — boot · L02 — first deploy · L03 — flapping cart · L04 — error
-budget · L05 — chaos friday. Node kinds live: `ingress`, `load-balancer`,
-`service`, `ci-gate`, `cache`.
+budget · L05 — chaos friday · L06 — back-pressure. All six roadmap node kinds are
+live: `ingress`, `load-balancer`, `service`, `ci-gate`, `cache`, `queue`.
 
 **Planned:**
 
-- **`queue` node** — a buffer with back-pressure (absorbs spikes, pushes back
-  upstream when full).
 - **Multi-axis scoring** — add cycles and test coverage alongside the cost axis.
 - **Infrastructure as Code** — declare part of a topology from a script/template.
 - **Narrative & NPCs** — diegetic incident briefings and the senior SRE mentor.
+- **Thematic campaign** — group levels into worlds (Ingress, Queues, Services,
+  CI/CD, Data/Cache, SRE panel) with boss scenarios.
 - **Terminal polish** — CRT glow and an ambient soundtrack.
