@@ -28,7 +28,7 @@ function font(size: number, weight = 500): string {
 }
 
 export function isNodeKind(t: Tool): t is NodeKind {
-  return t === 'ingress' || t === 'load-balancer' || t === 'service' || t === 'gate';
+  return t === 'ingress' || t === 'load-balancer' || t === 'service' || t === 'gate' || t === 'cache';
 }
 
 // --- hit-region layouts (shared by draw + input) -------------------------------
@@ -503,7 +503,7 @@ function drawHud(ctx: Ctx, game: Game): void {
   const gw = 96;
   drawGauge(ctx, 16, gy, gw, 'CPU', `${u.cpu}/${b.cpu}`, u.cpu / b.cpu, u.cpu > b.cpu);
   drawGauge(ctx, 128, gy, gw, 'MEM', `${u.mem}/${b.mem}`, u.mem / b.mem, u.mem > b.mem);
-  drawGauge(ctx, 240, gy, gw, 'COST', `$${u.cost.toFixed(2)}/${b.cost.toFixed(0)}`, u.cost / b.cost, u.cost > b.cost);
+  drawGauge(ctx, 240, gy, gw, 'COST', `$${u.cost.toFixed(2)}/${b.cost.toFixed(2)}`, u.cost / b.cost, u.cost > b.cost);
 
   const dropped = game.mode === 'edit' ? 0 : game.mode === 'running' ? game.droppedSoFar() : (game.sim?.totalDropped ?? 0);
   drawGauge(ctx, 352, gy, gw, 'ERR_BUDGET', `${dropped}/${game.level.errorBudget}`, dropped / game.level.errorBudget, dropped > game.level.errorBudget);

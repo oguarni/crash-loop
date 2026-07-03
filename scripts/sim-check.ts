@@ -3,6 +3,8 @@ import { simulate } from '../src/sim/engine';
 import { NODE_SPECS } from '../src/sim/nodes';
 import { L01 } from '../src/levels/L01';
 import { L02 } from '../src/levels/L02';
+import { L03 } from '../src/levels/L03';
+import { L04 } from '../src/levels/L04';
 import { Game } from '../src/game';
 import { mergeRecord } from '../src/progress';
 import type { Edge, GameNode } from '../src/types';
@@ -18,6 +20,7 @@ const ingress: GameNode = { id: 'ingress', kind: 'ingress', x: 0, y: 0 };
 const svc = (id: string): GameNode => ({ id, kind: 'service', x: 0, y: 0 });
 const lb: GameNode = { id: 'lb', kind: 'load-balancer', x: 0, y: 0 };
 const gate = (id: string): GameNode => ({ id, kind: 'gate', x: 0, y: 0 });
+const cache = (id: string): GameNode => ({ id, kind: 'cache', x: 0, y: 0 });
 const edge = (from: string, to: string): Edge => ({ id: `${from}->${to}`, from, to });
 
 // 1) ingress -> single service: 30 in, 10 served, 20 dropped/tick.
@@ -142,6 +145,95 @@ const gateRule = { requireBeforeSinks: L02.requireBeforeSinks };
   check('placing in open space succeeds', placed !== null && g.nodes.length === 2, `placed=${placed?.id ?? 'null'} nodes=${g.nodes.length}`);
   check('overlap is detected at an occupied slot', g.wouldOverlap(ing.x + 200, ing.y + 120) === true, 'expected overlap at the just-placed slot');
   check('a distant slot reads as free', g.wouldOverlap(ing.x + 200, ing.y + 120 - 80) === false, 'expected free slot one node-height away');
+}
+
+// ===== L03 "flapping cart": the cache node =====
+
+// cache + 2 services: cache serves half locally, forwards the misses. Zero drops.
+{
+  const nodes = [ingress, cache('c'), svc('s1'), svc('s2')];
+  const edges = [edge('ingress', 'c'), edge('c', 's1'), edge('c', 's2')];
+  const r = simulate(nodes, edges, L03.traffic);
+  check('L03 cache + 2 services drops nothing', r.totalDropped === 0, `dropped=${r.totalDropped}`);
+  check('L03 cache + 2 services serves everything', r.totalServed === r.totalArrived, `served=${r.totalServed} arrived=${r.totalArrived}`);
+  check('L03 cache forwards only its misses', r.ticks[0].edgeLoad['c->s1'] === 10 && r.ticks[0].edgeLoad['c->s2'] === 10,
+    `c->s1=${r.ticks[0].edgeLoad['c->s1']} c->s2=${r.ticks[0].edgeLoad['c->s2']}`);
+}
+
+// cache + 1 service: 20 misses hit one service (cap 10) -> drops 10/tick, blows budget.
+{
+  const nodes = [ingress, cache('c'), svc('s1')];
+  const edges = [edge('ingress', 'c'), edge('c', 's1')];
+  const r = simulate(nodes, edges, L03.traffic);
+  check('L03 cache + 1 service drops 10/tick', r.totalDropped === 10 * 30, `dropped=${r.totalDropped}`);
+  check('L03 cache + 1 service fails error budget', r.totalDropped > L03.errorBudget, `dropped=${r.totalDropped} budget=${L03.errorBudget}`);
+}
+
+// chained caches compound: ingress -> cache -> cache -> 1 service, zero drops.
+{
+  const nodes = [ingress, cache('c1'), cache('c2'), svc('s1')];
+  const edges = [edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 's1')];
+  const r = simulate(nodes, edges, L03.traffic);
+  check('L03 chained caches drop nothing', r.totalDropped === 0, `dropped=${r.totalDropped}`);
+}
+
+// conservation with a cache in the path.
+{
+  const nodes = [ingress, cache('c'), svc('s1'), svc('s2')];
+  const edges = [edge('ingress', 'c'), edge('c', 's1'), edge('c', 's2')];
+  const r = simulate(nodes, edges, L03.traffic);
+  check('L03 conservation holds', r.totalServed + r.totalDropped === r.totalArrived, `${r.totalServed}+${r.totalDropped}==${r.totalArrived}`);
+}
+
+// gold cost matches the intended build (guards against spec drift).
+{
+  const cost = NODE_SPECS.cache.cost + 2 * NODE_SPECS.service.cost;
+  check('L03 par cost matches the gold build', Math.abs(cost - L03.parCost) < 1e-9, `cost=${cost} par=${L03.parCost}`);
+  const brute = NODE_SPECS['load-balancer'].cost + 4 * NODE_SPECS.service.cost;
+  check('L03 cacheless brute force is priced out', brute > L03.budgets.cost, `brute=${brute} budget=${L03.budgets.cost}`);
+}
+
+// ===== L04 "error budget": spike + tight budget =====
+
+// the traffic profile: 700 total arrived, with a 5-tick spike.
+{
+  const total = L04.traffic.reduce((a, b) => a + b, 0);
+  const spikeTicks = L04.traffic.filter((x) => x === 40).length;
+  check('L04 traffic sums to 700 with a 5-tick spike', total === 700 && spikeTicks === 5, `total=${total} spike=${spikeTicks}`);
+}
+
+// gold: lb + 2 services. Base served fully; spike sheds 100, inside the 120 budget.
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2')];
+  const r = simulate(nodes, edges, L04.traffic);
+  check('L04 lb + 2 services drops exactly the spike (100)', r.totalDropped === 100, `dropped=${r.totalDropped}`);
+  check('L04 lb + 2 services stays within error budget', r.totalDropped <= L04.errorBudget, `dropped=${r.totalDropped} budget=${L04.errorBudget}`);
+  check('L04 lb + 2 services serves the rest', r.totalServed === r.totalArrived - 100, `served=${r.totalServed} arrived=${r.totalArrived}`);
+}
+
+// a safer lb + 3 services passes with fewer drops but costs more than par.
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2'), svc('s3')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3')];
+  const r = simulate(nodes, edges, L04.traffic);
+  check('L04 lb + 3 services passes with 50 drops', r.totalDropped === 50 && r.totalDropped <= L04.errorBudget, `dropped=${r.totalDropped}`);
+}
+
+// under-provisioning (1 service) blows the error budget.
+{
+  const nodes = [ingress, lb, svc('s1')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1')];
+  const r = simulate(nodes, edges, L04.traffic);
+  check('L04 lb + 1 service fails error budget', r.totalDropped > L04.errorBudget, `dropped=${r.totalDropped} budget=${L04.errorBudget}`);
+}
+
+// the zero-drop build is priced out: lb + 4 services costs more than the budget.
+{
+  const cost = NODE_SPECS['load-balancer'].cost + 4 * NODE_SPECS.service.cost;
+  check('L04 zero-drop build exceeds the budget', cost > L04.budgets.cost, `cost=${cost} budget=${L04.budgets.cost}`);
+  const gold = NODE_SPECS['load-balancer'].cost + 2 * NODE_SPECS.service.cost;
+  check('L04 par cost matches the gold build', Math.abs(gold - L04.parCost) < 1e-9, `cost=${gold} par=${L04.parCost}`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

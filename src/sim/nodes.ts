@@ -51,4 +51,17 @@ export const NODE_SPECS: Record<NodeKind, NodeSpec> = {
     fanOut: true, // forwards up to capacity downstream — the canary throughput cap
     description: 'Canary deploy gate. Forwards up to 20 req/tick; all traffic must clear it.',
   },
+  cache: {
+    kind: 'cache',
+    label: 'cache',
+    glyph: '[~]',
+    cpu: 1,
+    mem: 2, // memory-heavy: the cache's real constraint (per GDD §10)
+    cost: 1.0,
+    capacity: 100,
+    placeable: true,
+    fanOut: true, // forwards its misses downstream (kept out of the sink set)
+    hitRate: 0.5, // serves ~half the reads locally, forwards the misses
+    description: 'Serves ~50% of repeated reads locally; forwards the misses downstream.',
+  },
 };

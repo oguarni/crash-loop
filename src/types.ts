@@ -1,6 +1,6 @@
 // Shared domain types for the crash-loop simulation and editor.
 
-export type NodeKind = 'ingress' | 'load-balancer' | 'service' | 'gate';
+export type NodeKind = 'ingress' | 'load-balancer' | 'service' | 'gate' | 'cache';
 
 /** Static, per-kind definition: cost, capacity, and editor metadata. */
 export interface NodeSpec {
@@ -11,6 +11,9 @@ export interface NodeSpec {
   mem: number;
   cost: number; // dollars
   capacity: number; // requests routed/handled per tick (Infinity for ingress)
+  // Fraction of throughput served locally (cache hits); the rest is forwarded
+  // downstream as misses. Only defined for cache-kind nodes. Deterministic.
+  hitRate?: number;
   placeable: boolean; // can the player place this from the component rail?
   fanOut: boolean; // does it split throughput across outgoing edges?
   description: string;

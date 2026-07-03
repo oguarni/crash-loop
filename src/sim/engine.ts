@@ -4,9 +4,10 @@ import { NODE_SPECS } from './nodes';
 // The simulation is fully deterministic: same topology + same traffic profile
 // always yields the same result. No randomness, no wall-clock — a design pillar.
 // Each tick, the level's arrival rate is pushed from ingress and flows through
-// the graph in topological order. Fan-out nodes (ingress, load-balancer) split
-// throughput evenly across their outgoing edges; service nodes are sinks that
-// handle up to their capacity and drop the overflow.
+// the graph in topological order. Fan-out nodes (ingress, load-balancer, gate)
+// split throughput evenly across their outgoing edges; cache nodes serve a fixed
+// fraction locally and forward the misses; service nodes are sinks that handle
+// up to their capacity and drop the overflow.
 
 interface Graph {
   nodes: Map<string, GameNode>;
@@ -73,6 +74,11 @@ function fail(error: string): SimResult {
  * BFS from ingress that refuses to traverse `blockKinds` nodes. If it can still
  * reach a sink (a non-fan-out node, e.g. a service), some traffic reaches that
  * sink without passing a required intermediary — an invalid topology.
+ *
+ * NOTE: a cache is fanOut:true, so it is not treated as a sink here even though
+ * it serves some traffic locally. That is fine for the current levels; if a
+ * future level ever combines requireBeforeSinks with a cache, revisit this so
+ * cache hits before the required gate are not silently allowed.
  */
 function sinkReachableWithout(graph: Graph, ingressId: string, blockKinds: Set<NodeKind>): boolean {
   const visited = new Set<string>();
@@ -135,8 +141,32 @@ export function simulate(
       const outs = graph.outgoing.get(id)!;
       nodeInflow[id] = received;
 
-      if (spec.fanOut) {
-        // ingress / load-balancer: route up to capacity, then split downstream.
+      if (spec.hitRate != null) {
+        // cache: serve a deterministic fraction of throughput locally (hits),
+        // forward the misses downstream. Overflow beyond capacity is dropped.
+        const throughput = Math.min(received, spec.capacity);
+        const overCapacity = received - throughput;
+        if (overCapacity > 0) {
+          dropped += overCapacity;
+          nodeOverload[id] = true;
+        }
+        const hits = Math.floor(throughput * spec.hitRate);
+        const misses = throughput - hits;
+        served += hits;
+        if (outs.length === 0) {
+          if (misses > 0) {
+            dropped += misses;
+            nodeOverload[id] = true;
+          }
+        } else {
+          const shares = splitEven(misses, outs.length);
+          outs.forEach((e, i) => {
+            edgeLoad[e.id] = shares[i];
+            inflow.set(e.to, inflow.get(e.to)! + shares[i]);
+          });
+        }
+      } else if (spec.fanOut) {
+        // ingress / load-balancer / gate: route up to capacity, then split.
         const throughput = Math.min(received, spec.capacity);
         const overCapacity = received - throughput; // exceeded this node's limit
         if (overCapacity > 0) {
