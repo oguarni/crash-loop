@@ -186,9 +186,9 @@ function drawPackets(ctx: Ctx, p1: Point, p2: Point, load: number, color: string
 }
 
 /** Amber flecks falling from an overloaded node — the dropped requests. */
-function drawDropSparks(ctx: Ctx, node: GameNode, time: number): void {
+function drawDropSparks(ctx: Ctx, node: GameNode, time: number, color: string = palette.amber): void {
   const seed = hashId(node.id);
-  ctx.fillStyle = palette.amber;
+  ctx.fillStyle = color;
   for (let i = 0; i < 3; i++) {
     const phase = ((time / 680) + i * 0.34 + seed) % 1;
     const x = node.x + (i - 1) * 13 + Math.sin((seed + i) * 9) * 4;
@@ -357,13 +357,16 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
   for (const node of game.nodes) {
     const spec = NODE_SPECS[node.kind];
     const r: Rect = { x: node.x - NODE_W / 2, y: node.y - NODE_H / 2, w: NODE_W, h: NODE_H };
+    const downed = tick?.downed?.includes(node.id) ?? false;
     const overloaded = tick?.nodeOverload[node.id] ?? false;
     const isWireFrom = game.wireFromId === node.id;
     const isHover = game.hoverNodeId === node.id;
     const isSelected = game.selectedNodeId === node.id;
 
+    // a crashed replica (downed) reads as a red alert, above the amber "overloaded".
     let border: string = tint.greenDim;
-    if (overloaded) border = palette.amber;
+    if (downed) border = tint.red;
+    else if (overloaded) border = palette.amber;
     else if (isWireFrom) border = palette.green;
     else if (isSelected) border = palette.bone;
     else if (isHover) border = palette.green;
@@ -378,8 +381,17 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
       ctx.translate(-node.x, -node.y);
     }
 
-    // pulsing amber halo while the node is shedding traffic
-    if (overloaded) {
+    // urgent red halo while a replica is crashed; amber halo while merely overloaded
+    if (downed) {
+      const pulse = 0.5 + 0.5 * Math.sin(time / 90);
+      ctx.save();
+      ctx.globalAlpha = 0.28 + 0.5 * pulse;
+      ctx.strokeStyle = tint.red;
+      ctx.lineWidth = 2.5 + 3 * pulse;
+      rrect(ctx, { x: r.x - 3, y: r.y - 3, w: r.w + 6, h: r.h + 6 }, 9);
+      ctx.stroke();
+      ctx.restore();
+    } else if (overloaded) {
       const pulse = 0.5 + 0.5 * Math.sin(time / 110);
       ctx.save();
       ctx.globalAlpha = 0.2 + 0.4 * pulse;
@@ -394,17 +406,22 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
     rrect(ctx, r, 7);
     ctx.fill();
     ctx.strokeStyle = border;
-    ctx.lineWidth = isWireFrom || isSelected || overloaded ? 2 : 1.3;
+    ctx.lineWidth = isWireFrom || isSelected || overloaded || downed ? 2 : 1.3;
     rrect(ctx, r, 7);
     ctx.stroke();
 
-    const titleColor = overloaded ? palette.amber : palette.bone;
+    const titleColor = downed ? tint.red : overloaded ? palette.amber : palette.bone;
     label(ctx, `${spec.glyph} ${spec.label}`, node.x, node.y - 4, titleColor, 12, 600, 'center');
-    label(ctx, nodeStat(game, node, tick), node.x, node.y + 13, overloaded ? palette.amber : tint.greenDim, 11, 500, 'center');
+    if (downed) {
+      label(ctx, '! down', node.x, node.y + 13, tint.red, 11, 700, 'center');
+    } else {
+      label(ctx, nodeStat(game, node, tick), node.x, node.y + 13, overloaded ? palette.amber : tint.greenDim, 11, 500, 'center');
+    }
 
     ctx.restore();
 
-    if (overloaded) drawDropSparks(ctx, node, flowTime);
+    if (downed) drawDropSparks(ctx, node, flowTime, tint.red);
+    else if (overloaded) drawDropSparks(ctx, node, flowTime);
   }
 }
 
@@ -526,8 +543,15 @@ function drawHud(ctx: Ctx, game: Game): void {
     statusColor = game.overBudget() ? tint.red : tint.boneDim;
   } else if (game.mode === 'running') {
     const tickN = Math.min(game.playhead, game.level.traffic.length);
-    status = `${game.paused ? 'paused' : 'running'} · tick ${tickN}/${game.level.traffic.length}`;
-    statusColor = game.paused ? palette.amber : palette.green;
+    const dt = game.currentTick();
+    const down = dt?.downed?.length ?? 0;
+    if (down > 0) {
+      status = `INCIDENT · ${down} replica${down > 1 ? 's' : ''} down · tick ${tickN}/${game.level.traffic.length}`;
+      statusColor = tint.red;
+    } else {
+      status = `${game.paused ? 'paused' : 'running'} · tick ${tickN}/${game.level.traffic.length}`;
+      statusColor = game.paused ? palette.amber : palette.green;
+    }
   } else if (game.result) {
     status = game.result.gold ? 'GOLD' : game.result.passed ? 'PASS' : 'FAIL';
     statusColor = game.result.passed ? palette.green : tint.red;

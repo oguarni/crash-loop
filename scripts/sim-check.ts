@@ -5,6 +5,7 @@ import { L01 } from '../src/levels/L01';
 import { L02 } from '../src/levels/L02';
 import { L03 } from '../src/levels/L03';
 import { L04 } from '../src/levels/L04';
+import { L05 } from '../src/levels/L05';
 import { Game } from '../src/game';
 import { mergeRecord } from '../src/progress';
 import type { Edge, GameNode } from '../src/types';
@@ -234,6 +235,64 @@ const gateRule = { requireBeforeSinks: L02.requireBeforeSinks };
   check('L04 zero-drop build exceeds the budget', cost > L04.budgets.cost, `cost=${cost} budget=${L04.budgets.cost}`);
   const gold = NODE_SPECS['load-balancer'].cost + 2 * NODE_SPECS.service.cost;
   check('L04 par cost matches the gold build', Math.abs(gold - L04.parCost) < 1e-9, `cost=${gold} par=${L04.parCost}`);
+}
+
+// ===== L05 "chaos friday": seeded incident injection =====
+const chaosOpts = { chaos: L05.chaos };
+ 
+// gold: lb + 4 services survives two seeded incidents inside the error budget.
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3'), edge('lb', 's4')];
+  const r = simulate(nodes, edges, L05.traffic, chaosOpts);
+  check('L05 lb + 4 services survives chaos (50 drops)', r.totalDropped === 50, `dropped=${r.totalDropped}`);
+  check('L05 lb + 4 services within error budget', r.totalDropped <= L05.errorBudget, `dropped=${r.totalDropped} budget=${L05.errorBudget}`);
+}
+ 
+// under-provisioned builds can't absorb a lost replica — error budget blown.
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2'), svc('s3')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3')];
+  const r = simulate(nodes, edges, L05.traffic, chaosOpts);
+  check('L05 lb + 3 services fails under chaos', r.totalDropped > L05.errorBudget, `dropped=${r.totalDropped} budget=${L05.errorBudget}`);
+}
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2')];
+  const r = simulate(nodes, edges, L05.traffic, chaosOpts);
+  check('L05 lb + 2 services fails hard', r.totalDropped > L05.errorBudget, `dropped=${r.totalDropped}`);
+}
+ 
+// determinism: two identical runs produce identical drops.
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3'), edge('lb', 's4')];
+  const a = simulate(nodes, edges, L05.traffic, chaosOpts).totalDropped;
+  const b = simulate(nodes, edges, L05.traffic, chaosOpts).totalDropped;
+  check('L05 chaos is deterministic across runs', a === b, `runA=${a} runB=${b}`);
+}
+ 
+// symmetry: the gold outcome is seed-independent (every replica carries the same share).
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3'), edge('lb', 's4')];
+  const seeds = [1, 42, 0x5eed, 0xc0ffee, 123456];
+  const same = seeds.every((seed) => simulate(nodes, edges, L05.traffic, { chaos: { ...L05.chaos!, seed } }).totalDropped === 50);
+  check('L05 gold is robust to the seed (symmetric)', same, `all seeds -> 50 drops: ${same}`);
+}
+ 
+// control: with no chaos, the same build drops nothing (isolates the incident effect).
+{
+  const nodes = [ingress, lb, svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+  const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3'), edge('lb', 's4')];
+  const r = simulate(nodes, edges, L05.traffic);
+  check('L05 no-chaos control drops nothing', r.totalDropped === 0, `dropped=${r.totalDropped}`);
+}
+ 
+// par cost matches the gold build (guards against spec drift).
+{
+  const cost = NODE_SPECS['load-balancer'].cost + 4 * NODE_SPECS.service.cost;
+  check('L05 par cost matches the gold build', Math.abs(cost - L05.parCost) < 1e-9, `cost=${cost} par=${L05.parCost}`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

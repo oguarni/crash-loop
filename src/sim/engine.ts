@@ -1,13 +1,16 @@
-import type { Edge, GameNode, NodeKind, SimResult, SimTick } from '../types';
+import type { ChaosSpec, Edge, GameNode, NodeKind, SimResult, SimTick } from '../types';
 import { NODE_SPECS } from './nodes';
+import { makeRng, randInt } from './rng';
 
 // The simulation is fully deterministic: same topology + same traffic profile
-// always yields the same result. No randomness, no wall-clock — a design pillar.
-// Each tick, the level's arrival rate is pushed from ingress and flows through
-// the graph in topological order. Fan-out nodes (ingress, load-balancer, gate)
-// split throughput evenly across their outgoing edges; cache nodes serve a fixed
-// fraction locally and forward the misses; service nodes are sinks that handle
-// up to their capacity and drop the overflow.
+// (and, for chaos levels, the same seed) always yields the same result. No live
+// randomness, no wall-clock — a design pillar. Each tick, the level's arrival
+// rate is pushed from ingress and flows through the graph in topological order.
+// Fan-out nodes (ingress, load-balancer, gate) split throughput evenly across
+// their outgoing edges; cache nodes serve a fixed fraction locally and forward
+// the misses; service nodes are sinks that handle up to their capacity and drop
+// the overflow. On chaos levels, a seeded schedule knocks out individual service
+// nodes for a window of ticks (capacity -> 0), simulating a mid-run incident.
 
 interface Graph {
   nodes: Map<string, GameNode>;
@@ -96,11 +99,48 @@ function sinkReachableWithout(graph: Graph, ingressId: string, blockKinds: Set<N
   return false;
 }
 
+/**
+ * Build the incident schedule from the seed. Each window is a [minStart,maxStart]
+ * tick range for one incident; within it the seeded RNG fixes the exact start
+ * tick and the victim service, which is knocked out for `duration` ticks. The
+ * RNG is consumed in a fixed order (start, then victim, per incident), so the
+ * schedule is a pure function of the seed and the service set. Returns a
+ * tick -> Set(downed service ids) map.
+ */
+function buildIncidentSchedule(order: string[], graph: Graph, traffic: number[], chaos: ChaosSpec): Map<number, Set<string>> {
+  const downAt = new Map<number, Set<string>>();
+  const sinks = order.filter((id) => {
+    const spec = NODE_SPECS[graph.nodes.get(id)!.kind];
+    return !spec.fanOut && spec.hitRate == null; // true sinks: service nodes
+  });
+  if (sinks.length === 0) return downAt;
+
+  const rng = makeRng(chaos.seed);
+  // Deterministic Fisher-Yates shuffle of the victims, so successive incidents
+  // hit *distinct* replicas instead of each re-rolling independently (which can
+  // cluster on one node and read as non-random). Incident k takes the k-th
+  // shuffled replica, cycling if there are more incidents than replicas.
+  const victims = [...sinks];
+  for (let i = victims.length - 1; i > 0; i--) {
+    const j = randInt(rng, 0, i);
+    [victims[i], victims[j]] = [victims[j], victims[i]];
+  }
+  chaos.windows.forEach((window, k) => {
+    const start = randInt(rng, window[0], window[1]);
+    const victim = victims[k % victims.length];
+    for (let t = start; t < Math.min(start + chaos.duration, traffic.length); t++) {
+      if (!downAt.has(t)) downAt.set(t, new Set());
+      downAt.get(t)!.add(victim);
+    }
+  });
+  return downAt;
+}
+
 export function simulate(
   nodes: GameNode[],
   edges: Edge[],
   traffic: number[],
-  opts: { requireBeforeSinks?: NodeKind[] } = {},
+  opts: { requireBeforeSinks?: NodeKind[]; chaos?: ChaosSpec } = {},
 ): SimResult {
   const graph = buildGraph(nodes, edges);
   const order = topoOrder(graph);
@@ -117,6 +157,10 @@ export function simulate(
     return fail('Untested traffic reached production — every service must sit behind a deploy gate.');
   }
 
+  // Precompute the seeded incident schedule once, before the tick loop, so it is
+  // independent of per-tick processing and fully reproducible.
+  const downAt = opts.chaos ? buildIncidentSchedule(order, graph, traffic, opts.chaos) : null;
+
   const ticks: SimTick[] = [];
   let totalArrived = 0;
   let totalServed = 0;
@@ -124,6 +168,7 @@ export function simulate(
 
   for (let t = 0; t < traffic.length; t++) {
     const arrival = traffic[t];
+    const down = downAt ? downAt.get(t) : undefined;
     const inflow = new Map<string, number>();
     for (const id of graph.nodes.keys()) inflow.set(id, 0);
     inflow.set(ingress.id, arrival);
@@ -187,8 +232,10 @@ export function simulate(
           });
         }
       } else {
-        // service: a sink. Handle up to capacity, drop the overflow.
-        const handled = Math.min(received, spec.capacity);
+        // service: a sink. Handle up to capacity, drop the overflow. During a
+        // seeded incident the node is down (capacity 0) and sheds everything.
+        const capacity = down && down.has(id) ? 0 : spec.capacity;
+        const handled = Math.min(received, capacity);
         const overflow = received - handled;
         served += handled;
         if (overflow > 0) {
@@ -201,7 +248,16 @@ export function simulate(
     totalArrived += arrival;
     totalServed += served;
     totalDropped += dropped;
-    ticks.push({ t, arrived: arrival, served, dropped, edgeLoad, nodeInflow, nodeOverload });
+    ticks.push({
+      t,
+      arrived: arrival,
+      served,
+      dropped,
+      edgeLoad,
+      nodeInflow,
+      nodeOverload,
+      downed: down ? [...down] : undefined,
+    });
   }
 
   return { ok: true, ticks, totalArrived, totalServed, totalDropped };

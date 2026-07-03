@@ -23,6 +23,7 @@ Other scripts:
 npm run build      # type-check (tsc --noEmit) + production bundle into dist/
 npm run preview    # serve the production build locally
 npm run typecheck  # type-check only
+npm run test:sim   # headless deterministic sim-check harness (L01–L05)
 ```
 
 ## L01 — "boot" (the first playable level)
@@ -95,42 +96,130 @@ ingress ──> load-balancer ──┬──> ci-gate ──┬──> service
 drops, at **$7.50** — which also clears the gold tier. A third gate or fifth
 service would breach the $8.00 budget, so this build is the unique solution.
 
+## L03 — "flapping cart"
+
+`svc-cart` is flapping under a flood of **repeated reads**, and adding replicas
+is priced out. This level introduces the **cache** node: it serves a fixed
+fraction of its inflow locally (a cache *hit*) and forwards only the *misses*
+downstream — and, like a load-balancer, it splits those misses evenly.
+
+- A `cache` has `hitRate: 0.5`: of 40 req/tick it serves 20 as hits and forwards
+  20 as misses. It's cheap in cost but heavy in **memory** (`mem 2`).
+- Budget caps you at **$4.50 / 6 CPU / 6 MEM**; the error budget is 40.
+
+The dominant correct topology:
+
+```
+ingress ──> cache ──┬──> service
+                    └──> service
+```
+
+The cache serves 20 locally and forwards 20 → 10/10 into two services: zero
+drops, at **$3.00** (gold). The cacheless brute force (lb + 4 services = $5.50)
+is over budget, so you can't out-spend the problem — you have to cache. A chained
+`cache → cache → 1 service` also clears gold at $3.00, since caching compounds.
+
+## L04 — "error budget"
+
+This level flips the lesson: until now the goal was zero drops; here **serving
+everything is deliberately unaffordable**. Traffic holds at a steady 20 req/tick,
+spikes to **40 for five ticks**, then settles back.
+
+- Budget caps you at **$5.00 / 6 CPU / 6 MEM**; the error budget is 120.
+- The zero-drop build (lb + 4 services = $5.50) is over budget — you cannot buy
+  your way out of the spike.
+
+The dominant correct topology:
+
+```
+ingress ──> load-balancer ──┬──> service
+                            └──> service
+```
+
+Two services (cap 20) serve the steady 20 with zero drops; during the spike they
+shed 100 requests total, which sits inside the 120 error budget — at **$3.50**
+(gold). A safer lb + 3 services ($4.50) passes with only 50 drops but misses
+gold. The lesson: spend the error budget instead of overspending on capacity.
+
+## L05 — "chaos friday" (campaign boss)
+
+It's Friday and chaos is loose: replicas **crash mid-run, without warning**. A
+seeded schedule knocks out one service at a time (two incidents, five ticks
+each), and while a replica is down its capacity is 0 — everything routed to it is
+dropped. Traffic is a steady 20 req/tick.
+
+- Budget caps you at **$7.00 / 8 CPU / 8 MEM**; the error budget is 55.
+- The incident schedule lives entirely in a per-level **seed** — you can't see
+  the exact timing, so you build *for* the failure, not around it.
+
+The dominant correct topology:
+
+```
+ingress ──> load-balancer ──┬──> service
+                            ├──> service
+                            ├──> service
+                            └──> service
+```
+
+The lesson is **resilience through redundancy**. The load-balancer splits 20
+evenly, so with four services each carries only 5 req/tick; when one crashes,
+only its 5/tick are shed — across two 5-tick incidents that's 50 dropped, inside
+the 55 error budget, at **$5.50** (gold). Two or three services carry a bigger
+share (10 or ~7 per replica), so losing one blows the budget. Because the gold
+build is symmetric, *which* replica the seed picks never changes the outcome — so
+the run stays fully deterministic.
+
 ## Architecture
 
 ```
 src/
-  types.ts          shared domain types
+  types.ts          shared domain types (incl. ChaosSpec)
   palette.ts        canonical Three-Way Merge palette
   layout.ts         geometry constants + hit-testing helpers
   sim/
-    nodes.ts        per-kind specs (cost, capacity, fan-out behaviour)
+    nodes.ts        per-kind specs (cost, capacity, fan-out, cache hit-rate)
+    rng.ts          deterministic seeded PRNG (mulberry32) for chaos
     engine.ts       deterministic per-tick topological flow simulation
   levels/
-    L01.ts          the "boot" level spec
-    L02.ts          the "first deploy" level spec
+    L01.ts          "boot"          — routing / load balancing
+    L02.ts          "first deploy"  — deploy gate rule
+    L03.ts          "flapping cart" — cache node
+    L04.ts          "error budget"  — traffic spike, tight budget
+    L05.ts          "chaos friday"  — seeded incident injection
     index.ts        level register (played in order)
   game.ts           board state, editing rules, run/playback (framework-agnostic)
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
   render.ts         all canvas drawing + shared hit-region layouts
   main.ts           DOM wiring, input, the playback loop
+scripts/
+  sim-check.ts      headless deterministic verification harness (npm run test:sim)
 ```
 
 **Design notes**
 
-- The simulation is **fully deterministic** — the same topology and traffic
-  profile always produce the same result (a design pillar; randomness, when it
-  arrives, will be a seeded incident injection, not wall-clock noise).
+- The simulation is **fully deterministic** — the same topology, traffic profile
+  and seed always produce the same result (a design pillar). The chaos mechanic
+  (L05) is a **seeded incident injection**, not wall-clock noise: the schedule is
+  a pure function of the level seed, generated once before the tick loop.
 - Traffic flows through the graph in **topological order** each tick; a cycle is
   rejected as an invalid topology (a real DAG constraint).
+- Node behaviour is data-driven: `fanOut` nodes split evenly, a `hitRate` node
+  (cache) serves a fraction and forwards the rest, and plain sinks (services)
+  handle up to capacity and drop the overflow.
 - `game.ts` holds no rendering or DOM code, so the rules are unit-testable and
   the renderer is replaceable.
 
 ## Roadmap
 
-The level register is built to grow. Shipped: **L01 — boot**, **L02 — first
-deploy**. Planned scenarios, mirroring the level-select key art:
+**Shipped:** L01 — boot · L02 — first deploy · L03 — flapping cart · L04 — error
+budget · L05 — chaos friday. Node kinds live: `ingress`, `load-balancer`,
+`service`, `ci-gate`, `cache`.
 
-- **L03 — flapping cart**: a `cache` node to absorb repeated reads.
-- **L04 — error budget**: a tighter budget and a traffic spike.
-- **L05 — chaos friday**: seeded incident injection (Risk/Chance) mid-run.
-```
+**Planned:**
+
+- **`queue` node** — a buffer with back-pressure (absorbs spikes, pushes back
+  upstream when full).
+- **Multi-axis scoring** — add cycles and test coverage alongside the cost axis.
+- **Infrastructure as Code** — declare part of a topology from a script/template.
+- **Narrative & NPCs** — diegetic incident briefings and the senior SRE mentor.
+- **Terminal polish** — CRT glow and an ambient soundtrack.

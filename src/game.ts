@@ -240,6 +240,7 @@ export class Game {
     if (this.mode !== 'edit') return;
     const res = simulate(this.nodes, this.edges, this.level.traffic, {
       requireBeforeSinks: this.level.requireBeforeSinks,
+      chaos: this.level.chaos,
     });
     this.sim = res;
     if (!res.ok) {

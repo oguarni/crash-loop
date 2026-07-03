@@ -1,6 +1,7 @@
 // Shared domain types for the crash-loop simulation and editor.
 
 export type NodeKind = 'ingress' | 'load-balancer' | 'service' | 'gate' | 'cache';
+export interface ChaosSpec { seed: number; duration: number; windows: Array<[number, number]>; }
 
 /** Static, per-kind definition: cost, capacity, and editor metadata. */
 export interface NodeSpec {
@@ -57,6 +58,7 @@ export interface LevelSpec {
   // Node kinds that every path from ingress to a sink (service) must traverse.
   // e.g. ['gate'] forces all traffic through a deploy gate before production.
   requireBeforeSinks?: NodeKind[];
+  chaos?: ChaosSpec;
 }
 
 /** One simulated tick of traffic flowing through the topology. */
@@ -68,6 +70,7 @@ export interface SimTick {
   edgeLoad: Record<string, number>; // edge id -> requests carried this tick
   nodeInflow: Record<string, number>; // node id -> requests received this tick
   nodeOverload: Record<string, boolean>; // node id -> dropped traffic this tick
+  downed?: string[];
 }
 
 export interface SimResult {
