@@ -19,6 +19,11 @@ import {
 } from './layout';
 
 const MONO = "'IBM Plex Mono', ui-monospace, 'Courier New', monospace";
+// CRT phosphor glow (bloom): a blurred copy of the scene added back on top, so
+// bright green/amber elements bleed light. Set BLOOM_ALPHA to 0 to disable.
+const BLOOM_ALPHA = 0.35; // glow strength
+const BLOOM_BLUR = 5; // glow spread, in logical px
+const BLOOM_THRESHOLD = 3;    // >1 esmaga fundo/grade até o preto; só o brilhante sobra
 
 // Wall-clock ms when the boot screen first drew, used for its one-time intro.
 let titleT0 = 0;
@@ -129,6 +134,33 @@ function label(ctx: Ctx, s: string, x: number, y: number, color: string, size = 
   ctx.fillText(s, x, y);
 }
 
+/** Like `label`, but wraps `text` to `maxWidth`, drawing top-anchored lines.
+ *  Returns the y of the last line drawn. */
+function labelWrapped(
+  ctx: Ctx, text: string, x: number, y: number, maxWidth: number,
+  color: string, size = 13, weight = 500, lineHeight = 15,
+): number {
+  ctx.fillStyle = color;
+  ctx.font = font(size, weight);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const words = text.split(' ');
+  let line = '';
+  let cy = y;
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w;
+    if (line && ctx.measureText(test).width > maxWidth) {
+      ctx.fillText(line, x, cy);
+      line = w;
+      cy += lineHeight;
+    } else {
+      line = test;
+    }
+  }
+  if (line) ctx.fillText(line, x, cy);
+  return cy;
+}
+
 function center(target: Point): Point {
   return { x: target.x, y: target.y };
 }
@@ -150,6 +182,39 @@ function displayTick(game: Game): SimTick | null {
   if (game.mode === 'running') return game.sim.ticks[Math.min(game.playhead, game.sim.ticks.length - 1)];
   if (game.mode === 'result') return game.sim.ticks[game.sim.ticks.length - 1];
   return null;
+}
+
+let bloomCanvas: HTMLCanvasElement | null = null;
+
+/**
+ * CRT glow post-pass: blur a copy of the finished frame and add it back with an
+ * additive blend, so bright pixels bloom while the dark navy stays dark. Runs in
+ * raw device pixels (it temporarily resets the dpr transform) and touches no
+ * other drawing code — call it last, after the whole scene is composed.
+ */
+function applyBloom(ctx: Ctx): void {
+  if (BLOOM_ALPHA <= 0) return;
+  const src = ctx.canvas;
+  if (src.width === 0 || src.height === 0) return;
+  if (!bloomCanvas || bloomCanvas.width !== src.width || bloomCanvas.height !== src.height) {
+    bloomCanvas = document.createElement('canvas');
+    bloomCanvas.width = src.width;
+    bloomCanvas.height = src.height;
+  }
+  const bctx = bloomCanvas.getContext('2d');
+  if (!bctx) return;
+  const scale = src.width / VIEW_W; // recover the device-pixel ratio in use
+  bctx.clearRect(0, 0, bloomCanvas.width, bloomCanvas.height);
+    bctx.filter = `contrast(${BLOOM_THRESHOLD}) blur(${BLOOM_BLUR * scale}px)`;
+  bctx.drawImage(src, 0, 0);
+  bctx.filter = 'none';
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0); // composite in raw device pixels
+  ctx.globalCompositeOperation = 'lighter'; // additive: bright areas glow
+  ctx.globalAlpha = BLOOM_ALPHA;
+  ctx.drawImage(bloomCanvas, 0, 0);
+  ctx.restore(); // restores the dpr transform for the next frame
 }
 
 // --- animation helpers ---------------------------------------------------------
@@ -213,6 +278,8 @@ export function draw(ctx: Ctx, game: Game, mouse: Point, time: number, imgs: Gam
   drawRail(ctx, game, imgs);
   drawHud(ctx, game);
   if (game.mode === 'result' && game.result) drawResultBanner(ctx, game, time);
+
+  applyBloom(ctx);
 }
 
 function drawScanlines(ctx: Ctx): void {
@@ -242,8 +309,10 @@ function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number, flowTime
     ctx.stroke();
   }
 
-  // brief at the top, hint at the bottom
-  label(ctx, `${game.level.id} ${game.level.name} — ${game.level.brief}`, WORK_LEFT + 16, 26, tint.boneDim, 11, 500);
+  // brief at the top (wrapped so long text never overflows), hint at the bottom
+  const briefX = WORK_LEFT + 16;
+  const briefMaxW = VIEW_W - briefX - 16;
+  labelWrapped(ctx, `${game.level.id} ${game.level.name} — ${game.level.brief}`, briefX, 26, briefMaxW, tint.boneDim, 11, 500, 15);
   label(ctx, `hint: ${game.level.hint}`, WORK_LEFT + 16, WORK_BOTTOM - 14, tint.greenDim, 11, 400);
 
   const tick = displayTick(game);
