@@ -1008,14 +1008,19 @@ export interface LevelCard {
 
 const MENU_COLS = 2;
 const MENU_CARD_W = 384;
-const MENU_CARD_H = 84;
+const MENU_CARD_MAX_H = 84;
 const MENU_GAP_X = 24;
-const MENU_GAP_Y = 18;
-const MENU_TOP = 188;
+const MENU_GAP_Y = 16;
+const MENU_TOP = 178;
+const MENU_BOTTOM = 546; // keep the grid clear of the footer (progress + credit)
 
 /** Grid of clickable level cards (2 columns). Hit-regions for the input layer,
- *  laid out the same way the rail and HUD buttons expose theirs. */
+ *  laid out the same way the rail and HUD buttons expose theirs. The card height
+ *  shrinks as levels are added so the grid always fits above the footer. */
 export function layoutLevelSelect(count: number): LevelCard[] {
+  const rows = Math.max(1, Math.ceil(count / MENU_COLS));
+  const avail = MENU_BOTTOM - MENU_TOP - (rows - 1) * MENU_GAP_Y;
+  const cardH = Math.min(MENU_CARD_MAX_H, Math.floor(avail / rows));
   const gridW = MENU_COLS * MENU_CARD_W + (MENU_COLS - 1) * MENU_GAP_X;
   const startX = (VIEW_W - gridW) / 2;
   const cards: LevelCard[] = [];
@@ -1026,9 +1031,9 @@ export function layoutLevelSelect(count: number): LevelCard[] {
       index: i,
       rect: {
         x: startX + col * (MENU_CARD_W + MENU_GAP_X),
-        y: MENU_TOP + row * (MENU_CARD_H + MENU_GAP_Y),
+        y: MENU_TOP + row * (cardH + MENU_GAP_Y),
         w: MENU_CARD_W,
-        h: MENU_CARD_H,
+        h: cardH,
       },
     });
   }
