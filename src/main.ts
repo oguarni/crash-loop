@@ -2,6 +2,7 @@ import { Game, type Mode } from './game';
 import type { ButtonId } from './render';
 import {
   draw,
+  drawHelpOverlay,
   drawMenu,
   drawTitle,
   isNodeKind,
@@ -51,6 +52,10 @@ const mouse: Point = { x: 0, y: 0 };
 // "menu" affordance returns to the menu. Cosmetic state only — never the sim.
 type Screen = 'boot' | 'menu' | 'play';
 let screen: Screen = 'boot';
+
+// In-game help/legend overlay (the ? / H toggle). Cosmetic: it reads game state
+// but never mutates it, and the input layer swallows clicks while it's open.
+let helpOpen = false;
 
 // Per-level saved bests + cleared count, sampled fresh each time the menu opens
 // so a level cleared this session shows its new tier on return.
@@ -105,6 +110,11 @@ function onDown(p: Point): void {
   if (screen === 'menu') {
     const card = layoutLevelSelect(LEVELS.length).find((c) => pointInRect(p.x, p.y, c.rect));
     if (card) startLevel(card.index);
+    return;
+  }
+  // any click dismisses the help overlay without touching the board
+  if (helpOpen) {
+    helpOpen = false;
     return;
   }
   game.flash = null;
@@ -257,7 +267,15 @@ window.addEventListener('keydown', (e) => {
     if (e.key >= '1' && e.key <= '9') startLevel(Number(e.key) - 1);
     return;
   }
-  if (e.key === 'm' || e.key === 'M') {
+  // while help is open it swallows every gameplay key, so a run can't be paused,
+  // skipped, or edited from behind the overlay — only its own close keys act.
+  if (helpOpen) {
+    if (e.key === '?' || e.key === 'h' || e.key === 'H' || e.key === 'Escape') helpOpen = false;
+    return;
+  }
+  if (e.key === '?' || e.key === 'h' || e.key === 'H') {
+    helpOpen = true;
+  } else if (e.key === 'm' || e.key === 'M') {
     audio.toggleMuted();
   } else if (e.key === 'Escape') {
     // clear a pending wire/selection first; a "clean" Esc returns to the menu.
@@ -354,6 +372,7 @@ function frame(ts: number): void {
   }
 
   draw(ctx!, game, mouse, ts, images, flowTime);
+  if (helpOpen) drawHelpOverlay(ctx!, game);
   requestAnimationFrame(frame);
 }
 

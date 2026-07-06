@@ -767,6 +767,73 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   ctx.restore();
 }
 
+// --- help / legend overlay ------------------------------------------------------
+
+const HELP_CONTROLS: Array<[string, string]> = [
+  ['component', 'pick from the rail, then click the board to place it'],
+  ['wire  ->', 'click a source node, then a target, to connect them'],
+  ['move  ::', 'drag a node to reposition it'],
+  ['delete  x', 'click a node or edge to remove it'],
+  ['Run / Enter', 'simulate the traffic run'],
+  ['Space / P', 'pause or resume a run'],
+  ['Skip >>', 'jump straight to the end of a run'],
+  ['M', 'mute / unmute all sound'],
+  ['Esc', 'clear a selection, or return to the level menu'],
+  ['?  or  H', 'toggle this help'],
+];
+
+/**
+ * Translucent help/legend over the current level: the control list plus a
+ * one-line description of every node kind in play. Purely cosmetic — it reads
+ * game state but never mutates it, and the input layer swallows clicks while
+ * it's open, so a run keeps playing deterministically underneath.
+ */
+export function drawHelpOverlay(ctx: Ctx, game: Game): void {
+  ctx.save();
+  ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  const panel: Rect = { x: 168, y: 44, w: 624, h: 500 };
+  ctx.fillStyle = tint.panel;
+  rrect(ctx, panel, 12);
+  ctx.fill();
+  ctx.strokeStyle = palette.green;
+  ctx.lineWidth = 1.5;
+  rrect(ctx, panel, 12);
+  ctx.stroke();
+
+  const px = panel.x + 28;
+  label(ctx, 'HELP / LEGEND', px, panel.y + 36, palette.green, 18, 700);
+  label(ctx, `${game.level.id} · ${game.level.name}`, panel.x + panel.w - 28, panel.y + 36, tint.boneDim, 12, 500, 'right');
+
+  // controls
+  label(ctx, 'CONTROLS', px, panel.y + 68, tint.boneDim, 11, 600);
+  let cy = panel.y + 90;
+  for (const [key, desc] of HELP_CONTROLS) {
+    label(ctx, key, px, cy, palette.bone, 12, 700);
+    label(ctx, desc, px + 132, cy, tint.boneDim, 12, 500);
+    cy += 20;
+  }
+
+  // node legend — only the kinds this level actually uses
+  const kinds: NodeKind[] = [];
+  for (const k of [...game.level.initialNodes.map((n) => n.kind), ...game.level.palette]) {
+    if (!kinds.includes(k)) kinds.push(k);
+  }
+  cy += 14;
+  label(ctx, 'COMPONENTS IN THIS LEVEL', px, cy, tint.boneDim, 11, 600);
+  cy += 22;
+  for (const kind of kinds) {
+    const spec = NODE_SPECS[kind];
+    label(ctx, `${spec.glyph} ${spec.label}`, px, cy, palette.green, 12, 700);
+    const end = labelWrapped(ctx, spec.description, px + 132, cy, panel.w - 132 - 56, tint.boneDim, 12, 500, 15);
+    cy = Math.max(cy + 20, end + 12);
+  }
+
+  label(ctx, 'press ? or Esc to close', panel.x + panel.w / 2, panel.y + panel.h - 18, tint.greenDim, 11, 500, 'center');
+  ctx.restore();
+}
+
 // --- title / boot screen -------------------------------------------------------
 
 /** Draw `img` filling `r` while preserving aspect ratio (CSS object-fit: cover). */
