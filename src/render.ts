@@ -25,7 +25,10 @@ const MONO = "'IBM Plex Mono', ui-monospace, 'Courier New', monospace";
 // bright green/amber elements bleed light. Set BLOOM_ALPHA to 0 to disable.
 const BLOOM_ALPHA = 0.35; // glow strength
 const BLOOM_BLUR = 5; // glow spread, in logical px
-const BLOOM_THRESHOLD = 3;    // >1 esmaga fundo/grade até o preto; só o brilhante sobra
+const BLOOM_THRESHOLD = 3; // >1 crushes the background/grid toward black so only bright pixels bloom
+// Corner darkening for CRT mood. Set to 0 to switch it off entirely; dial down
+// for a bright projector where any extra darkening costs legibility.
+const VIGNETTE_ALPHA = 0.2;
 
 // Wall-clock ms when the boot screen first drew, used for its one-time intro.
 let titleT0 = 0;
@@ -224,6 +227,25 @@ function applyBloom(ctx: Ctx): void {
   ctx.restore(); // restores the dpr transform for the next frame
 }
 
+/**
+ * CRT vignette: a radial darkening toward the corners, drawn last (over the
+ * bloom) as the final mood layer. Gated behind VIGNETTE_ALPHA so a projector
+ * setup can turn it down to zero without touching anything else.
+ */
+function drawVignette(ctx: Ctx): void {
+  if (VIGNETTE_ALPHA <= 0) return;
+  const g = ctx.createRadialGradient(
+    VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.38,
+    VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.9,
+  );
+  g.addColorStop(0, 'rgba(3, 5, 12, 0)');
+  g.addColorStop(1, `rgba(3, 5, 12, ${VIGNETTE_ALPHA})`);
+  ctx.save();
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  ctx.restore();
+}
+
 // --- animation helpers ---------------------------------------------------------
 
 /** Overshooting ease, for the node placement pop. */
@@ -287,6 +309,7 @@ export function draw(ctx: Ctx, game: Game, mouse: Point, time: number, imgs: Gam
   if (game.mode === 'result' && game.result) drawResultBanner(ctx, game, time);
 
   applyBloom(ctx);
+  drawVignette(ctx);
 }
 
 function drawScanlines(ctx: Ctx): void {
@@ -1128,4 +1151,5 @@ export function drawMenu(
   );
 
   applyBloom(ctx);
+  drawVignette(ctx);
 }
