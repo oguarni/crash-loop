@@ -1,8 +1,6 @@
 // Shared domain types for the crash-loop simulation and editor.
 
 export type NodeKind = 'ingress' | 'load-balancer' | 'service' | 'gate' | 'cache' | 'queue';
-// em SimResult:
-export interface SimResult { ok: boolean; error?: string; ticks: SimTick[]; totalArrived: number; totalServed: number; totalDropped: number; totalLatency: number; coverage: number; }
 
 /** Static, per-kind definition: cost, capacity, and editor metadata. */
 export interface NodeSpec {
@@ -42,6 +40,18 @@ export interface Budgets {
   cpu: number;
   mem: number;
   cost: number;
+}
+
+/**
+ * Seeded incident schedule for a chaos level (L05). Purely a function of `seed`:
+ * for each window `[minStart, maxStart]` the RNG fixes one incident's start tick,
+ * and a victim service is knocked out (capacity -> 0) for `duration` ticks. No
+ * wall-clock, no live randomness — same seed always yields the same schedule.
+ */
+export interface ChaosSpec {
+  seed: number;
+  duration: number; // how many ticks each incident lasts
+  windows: [number, number][]; // per-incident [minStart, maxStart] tick ranges
 }
 
 /** A complete, self-contained level definition. */
@@ -85,4 +95,6 @@ export interface SimResult {
   totalArrived: number;
   totalServed: number;
   totalDropped: number;
+  totalLatency: number; // sum of request-ticks spent buffered in queues (cycles axis)
+  coverage: number; // fraction of services sitting behind a CI gate (0..1)
 }
