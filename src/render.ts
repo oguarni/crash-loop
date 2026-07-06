@@ -528,12 +528,18 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   label(ctx, 'crash-loop', textX, 30, palette.green, 17, 700);
   label(ctx, `${game.level.id} · ${game.level.name}`, textX, 48, tint.boneDim, 11, 500);
 
-  // saved best for this level, shown when replaying a cleared scenario
+  // saved best for this level, shown when replaying a cleared scenario — the
+  // same multi-axis bests the result banner reports, condensed onto one line.
   const rec = game.savedRecord;
   if (rec && rec.tier !== 'none') {
     const col = rec.tier === 'gold' ? palette.amber : palette.green;
+    const ax = levelAxes(game);
+    const parts: string[] = [rec.tier];
+    if (rec.bestCost != null) parts.push(`$${rec.bestCost.toFixed(2)}`);
+    if (ax.cycles && rec.bestCycles != null) parts.push(`⟳${rec.bestCycles}`);
+    if (ax.coverage && rec.bestCoverage != null) parts.push(`${Math.round(rec.bestCoverage * 100)}%`);
     label(ctx, '*', 14, 64, col, 11, 700);
-    label(ctx, `best ${rec.tier}${rec.bestCost != null ? ` $${rec.bestCost.toFixed(2)}` : ''}`, 26, 64, tint.boneDim, 10, 500);
+    label(ctx, parts.join(' · '), 26, 64, tint.boneDim, 10, 500);
   }
 
   // back-to-menu affordance (also the Esc key)
@@ -676,6 +682,27 @@ function drawButtons(ctx: Ctx, buttons: Button[]): void {
 
 // --- result banner -------------------------------------------------------------
 
+/**
+ * Which scoring axes actually apply to a level, so the banner/rail can render a
+ * clean "—" instead of a misleading 0 where an axis is meaningless: cycles only
+ * matter when a queue can buffer traffic; coverage only when a CI gate exists.
+ */
+function levelAxes(game: Game): { cycles: boolean; coverage: boolean } {
+  const kinds = new Set<NodeKind>([
+    ...game.level.palette,
+    ...game.level.initialNodes.map((n) => n.kind),
+  ]);
+  const coverage = kinds.has('gate') || (game.level.requireBeforeSinks?.includes('gate') ?? false);
+  return { cycles: kinds.has('queue'), coverage };
+}
+
+/** One axis column on the result banner: name, this run's value, saved best. */
+function drawAxis(ctx: Ctx, x: number, y: number, name: string, value: string, best: string, hot: boolean): void {
+  label(ctx, name, x, y, tint.boneDim, 10, 600);
+  label(ctx, value, x, y + 17, hot ? palette.green : palette.bone, 15, 700);
+  label(ctx, best, x, y + 33, tint.greenDim, 10, 500);
+}
+
 function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   const res = game.result;
   if (!res) return;
@@ -713,17 +740,30 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
     label(ctx, 'NEW BEST', chip.x + chip.w / 2, chip.y + 14, palette.navy, 10, 700, 'center');
   }
 
-  label(ctx, res.message, x + 24, y + 60, palette.bone, 12, 500);
-  label(ctx, `served ${res.totalServed}  ·  cost $${res.cost.toFixed(2)}  ·  cycles ${res.cycles}  ·  coverage ${Math.round(res.coverage * 100)}%`, x + 24, y + 82, tint.boneDim, 11, 500);
+  label(ctx, res.message, x + 24, y + 58, palette.bone, 12, 500);
 
+  // three scoring axes (cost / cycles / coverage), each with its saved best.
+  // Only passing runs record a best, and the NEW BEST chip flags an improvement;
+  // an axis that doesn't apply to this level renders "—" rather than a bare 0.
   const rec = game.savedRecord;
-  const bestStr =
-    rec && rec.tier !== 'none'
-      ? `best: ${rec.tier.toUpperCase()}${rec.bestCost != null ? ` · $${rec.bestCost.toFixed(2)}` : ''}`
-      : 'best: — (first clear)';
-  label(ctx, bestStr, x + 24, y + 104, rec?.tier === 'gold' ? palette.amber : palette.green, 11, 600);
+  const ax = levelAxes(game);
+  const ay = y + 76;
+  const c0 = x + 24;
+  const c1 = x + 214;
+  const c2 = x + 404;
 
-  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 130, tint.greenDim, 11, 400);
+  drawAxis(ctx, c0, ay, 'COST $', res.cost.toFixed(2),
+    rec?.bestCost != null ? `best ${rec.bestCost.toFixed(2)}` : 'best —', game.newBest);
+
+  const cyclesVal = ax.cycles ? String(res.cycles) : '—';
+  const cyclesBest = !ax.cycles ? '—' : rec?.bestCycles != null ? `best ${rec.bestCycles}` : 'best —';
+  drawAxis(ctx, c1, ay, '⟳ CYCLES', cyclesVal, cyclesBest, game.newBest && ax.cycles);
+
+  const covVal = ax.coverage ? `${Math.round(res.coverage * 100)}%` : '—';
+  const covBest = !ax.coverage ? '—' : rec?.bestCoverage != null ? `best ${Math.round(rec.bestCoverage * 100)}%` : 'best —';
+  drawAxis(ctx, c2, ay, 'COVERAGE', covVal, covBest, game.newBest && ax.coverage);
+
+  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 138, tint.greenDim, 11, 400);
   ctx.restore();
 }
 
