@@ -9,6 +9,12 @@ let ac: AudioContext | null = null;
 let master: GainNode | null = null;
 let muted = false;
 
+// A low, continuous ambient hum for CRT mood. Cosmetic like every other cue —
+// it never feeds the simulation. It starts on the unlock gesture, and its gain
+// tracks the mute state so M silences it along with everything else.
+let ambientGain: GainNode | null = null;
+const AMBIENT_LEVEL = 0.05; // relative to master; a barely-there room tone
+
 function context(): AudioContext | null {
   if (ac) return ac;
   const Ctor =
@@ -116,10 +122,35 @@ export const sfx = {
   },
 };
 
+/**
+ * Start the ambient pad: two detuned low voices through a gentle lowpass, so it
+ * reads as a warm room tone rather than a buzz. Idempotent — safe to call on
+ * every unlock. Must run from a user gesture (browsers block audio otherwise).
+ */
+function startAmbient(): void {
+  const c = context();
+  if (!c || !master || ambientGain) return;
+  ambientGain = c.createGain();
+  ambientGain.gain.value = muted ? 0 : AMBIENT_LEVEL;
+  const lp = c.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = 220;
+  for (const f of [55, 82.5]) {
+    const o = c.createOscillator();
+    o.type = 'triangle';
+    o.frequency.value = f;
+    o.connect(lp);
+    o.start();
+  }
+  lp.connect(ambientGain);
+  ambientGain.connect(master);
+}
+
 /** Resume the context — must be called from within a user gesture. */
 export function unlock(): void {
   const c = context();
   if (c && c.state === 'suspended') void c.resume();
+  startAmbient();
 }
 
 export function isMuted(): boolean {
@@ -130,5 +161,9 @@ export function isMuted(): boolean {
 export function toggleMuted(): boolean {
   muted = !muted;
   if (!muted) unlock();
+  // fade the ambient hum with the mute toggle so M silences it too
+  if (ambientGain && ac) {
+    ambientGain.gain.setTargetAtTime(muted ? 0 : AMBIENT_LEVEL, ac.currentTime, 0.05);
+  }
   return muted;
 }
