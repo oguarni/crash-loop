@@ -1,0 +1,28 @@
+name: CI
+
+# Gate every PR and every push to main on a clean type-check, the full test
+# suite with coverage thresholds, and a production build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Supersede in-flight runs on the same ref so a rapid push sequence doesn't queue.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # coverage runs the full Vitest suite and enforces the >=80 / >=95 gates.
+      - run: npm run coverage
+      - run: npm run build
