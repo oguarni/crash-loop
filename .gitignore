@@ -21,3 +21,6 @@ CLAUDE.md
 # Generation scratch & heavy art assets (not used by the build)
 backup/
 imgs/
+
+# Generated deliverables (built from the .md sources by scripts/build-*.py)
+*.pdf
