@@ -12,6 +12,11 @@ Machado · Marcos Winícios Silva Martins) for *Software Engineering for Games �
 
 ## Run it
 
+**▶ Play it live:** https://oguarni.github.io/crash-loop/ — deployed from `main`
+by GitHub Actions on every push (no install required).
+
+To run it locally:
+
 ```bash
 npm install
 npm run dev      # vite dev server, opens the playable build
@@ -23,7 +28,9 @@ Other scripts:
 npm run build      # type-check (tsc --noEmit) + production bundle into dist/
 npm run preview    # serve the production build locally
 npm run typecheck  # type-check only
-npm run test:sim   # headless deterministic sim-check harness (L01–L06)
+npm run test       # full Vitest suite (sim, board rules, progress)
+npm run coverage   # Vitest with v8 coverage thresholds (>=80 / >=95 core)
+npm run test:sim   # headless deterministic sim-check smoke harness (L01–L06)
 ```
 
 ## L01 — "boot" (the first playable level)
