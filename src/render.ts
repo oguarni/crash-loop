@@ -1,5 +1,6 @@
-import type { GameNode, NodeKind, SimTick } from './types';
+import type { GameNode, LevelSpec, NodeKind, SimTick } from './types';
 import type { Game, Tool } from './game';
+import type { LevelRecord } from './progress';
 import { NODE_SPECS } from './sim/nodes';
 import { palette, tint } from './palette';
 import { type GameImages, ready } from './images';
@@ -14,6 +15,7 @@ import {
   WORK_BOTTOM,
   WORK_LEFT,
   WORK_TOP,
+  pointInRect,
   type Point,
   type Rect,
 } from './layout';
@@ -50,7 +52,7 @@ export function layoutRail(game: Game): RailItem[] {
   const items: RailItem[] = [];
   const pad = 12;
   const rowW = RAIL_W - pad * 2;
-  let y = 100;
+  let y = 112; // leaves room for the header + best readout + the "menu" affordance
 
   for (const kind of game.level.palette) {
     const spec = NODE_SPECS[kind];
@@ -115,6 +117,11 @@ export function layoutButtons(game: Game): Button[] {
 /** Sound on/off toggle, in the rail's free space above the HUD (also the M key). */
 export function layoutMuteButton(): Rect {
   return { x: 12, y: WORK_BOTTOM - 30, w: RAIL_W - 24, h: 20 };
+}
+
+/** "Back to menu" affordance, tucked under the rail header (also the Esc key). */
+export function layoutMenuButton(): Rect {
+  return { x: 12, y: 74, w: RAIL_W - 24, h: 20 };
 }
 
 // --- small canvas helpers ------------------------------------------------------
@@ -529,6 +536,16 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
     label(ctx, `best ${rec.tier}${rec.bestCost != null ? ` $${rec.bestCost.toFixed(2)}` : ''}`, 26, 64, tint.boneDim, 10, 500);
   }
 
+  // back-to-menu affordance (also the Esc key)
+  const menuBtn = layoutMenuButton();
+  ctx.strokeStyle = tint.charcoalDim;
+  ctx.lineWidth = 1;
+  rrect(ctx, menuBtn, 5);
+  ctx.stroke();
+  label(ctx, '<', menuBtn.x + 10, menuBtn.y + 14, palette.green, 11, 700);
+  label(ctx, 'menu', menuBtn.x + 26, menuBtn.y + 14, tint.boneDim, 11, 500);
+  label(ctx, 'Esc', menuBtn.x + menuBtn.w - 10, menuBtn.y + 14, tint.greenDim, 10, 600, 'right');
+
   const items = layoutRail(game);
   const firstComp = items.find((i) => isNodeKind(i.tool));
   const firstTool = items.find((i) => i.tool === 'move');
@@ -850,4 +867,158 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     ctx.restore();
   }
+}
+
+// --- level select menu ---------------------------------------------------------
+
+export interface LevelCard {
+  index: number;
+  rect: Rect;
+}
+
+const MENU_COLS = 2;
+const MENU_CARD_W = 384;
+const MENU_CARD_H = 84;
+const MENU_GAP_X = 24;
+const MENU_GAP_Y = 18;
+const MENU_TOP = 188;
+
+/** Grid of clickable level cards (2 columns). Hit-regions for the input layer,
+ *  laid out the same way the rail and HUD buttons expose theirs. */
+export function layoutLevelSelect(count: number): LevelCard[] {
+  const gridW = MENU_COLS * MENU_CARD_W + (MENU_COLS - 1) * MENU_GAP_X;
+  const startX = (VIEW_W - gridW) / 2;
+  const cards: LevelCard[] = [];
+  for (let i = 0; i < count; i++) {
+    const col = i % MENU_COLS;
+    const row = Math.floor(i / MENU_COLS);
+    cards.push({
+      index: i,
+      rect: {
+        x: startX + col * (MENU_CARD_W + MENU_GAP_X),
+        y: MENU_TOP + row * (MENU_CARD_H + MENU_GAP_Y),
+        w: MENU_CARD_W,
+        h: MENU_CARD_H,
+      },
+    });
+  }
+  return cards;
+}
+
+/** Truncate `s` with an ellipsis so it fits within `maxW` at the given font. */
+function truncate(ctx: Ctx, s: string, maxW: number, size: number, weight = 500): string {
+  ctx.font = font(size, weight);
+  if (ctx.measureText(s).width <= maxW) return s;
+  let out = s;
+  while (out.length > 1 && ctx.measureText(out + '…').width > maxW) out = out.slice(0, -1);
+  return out.trimEnd() + '…';
+}
+
+/**
+ * Title-screen level select. Every level is reachable — the presenter can jump
+ * straight to any mechanic without solving the earlier ones live. Cards show the
+ * saved tier/cost (from progress), and an uncleared level reads as "locked" but
+ * is still openable. Pure draw + `layoutLevelSelect` hit-regions; no game state.
+ */
+export function drawMenu(
+  ctx: Ctx,
+  imgs: GameImages,
+  levels: LevelSpec[],
+  records: (LevelRecord | null)[],
+  mouse: Point,
+  cleared = 0,
+): void {
+  ctx.fillStyle = palette.navy;
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  // same faint grid + scanline texture as the work area / boot screen
+  ctx.strokeStyle = tint.grid;
+  ctx.lineWidth = 1;
+  for (let x = 40; x < VIEW_W; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, VIEW_H);
+    ctx.stroke();
+  }
+  for (let y = 40; y < VIEW_H; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(VIEW_W, y);
+    ctx.stroke();
+  }
+  drawScanlines(ctx);
+
+  // header — wordmark if the art has decoded, otherwise the plain title
+  if (ready(imgs.logo)) {
+    const lw = 300;
+    const lh = (lw * imgs.logo.naturalHeight) / imgs.logo.naturalWidth;
+    ctx.drawImage(imgs.logo, (VIEW_W - lw) / 2, 60, lw, lh);
+  } else {
+    label(ctx, 'crash-loop', VIEW_W / 2, 96, palette.green, 30, 700, 'center');
+  }
+  label(ctx, 'select a region — click a card or press 1–' + levels.length, VIEW_W / 2, 162, tint.boneDim, 13, 500, 'center');
+
+  const cards = layoutLevelSelect(levels.length);
+  for (const c of cards) {
+    const lvl = levels[c.index];
+    const rec = records[c.index] ?? null;
+    const isCleared = rec != null && rec.tier !== 'none';
+    const gold = rec?.tier === 'gold';
+    const hover = pointInRect(mouse.x, mouse.y, c.rect);
+    const r = c.rect;
+
+    // accent: gold > cleared > locked; hover brightens the border
+    const accent = gold ? palette.amber : isCleared ? palette.green : tint.greenDim;
+    ctx.fillStyle = tint.node;
+    rrect(ctx, r, 9);
+    ctx.fill();
+    if (hover) {
+      ctx.fillStyle = tint.greenDim;
+      rrect(ctx, r, 9);
+      ctx.fill();
+    }
+    ctx.strokeStyle = hover ? palette.bone : accent;
+    ctx.lineWidth = hover ? 1.8 : 1.2;
+    rrect(ctx, r, 9);
+    ctx.stroke();
+
+    // hotkey chip
+    const chip: Rect = { x: r.x + 12, y: r.y + 14, w: 30, h: 30 };
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1.2;
+    rrect(ctx, chip, 6);
+    ctx.stroke();
+    label(ctx, String(c.index + 1), chip.x + chip.w / 2, chip.y + 21, palette.bone, 15, 700, 'center');
+
+    const tx = r.x + 56;
+    const tw = r.w - 56 - 16;
+    label(ctx, `${lvl.id} · ${lvl.name}`, tx, r.y + 26, palette.bone, 14, 700);
+    label(ctx, truncate(ctx, lvl.brief, tw, 10, 400), tx, r.y + 44, tint.boneDim, 10, 400);
+
+    // status line: saved tier + best cost, or a subtle locked marker
+    if (isCleared) {
+      const mark = gold ? '[*] GOLD' : '[+] PASS';
+      const best = rec?.bestCost != null ? ` · $${rec.bestCost.toFixed(2)}` : '';
+      label(ctx, `${mark}${best}`, tx, r.y + 66, accent, 11, 700);
+    } else {
+      label(ctx, '[ ] not cleared', tx, r.y + 66, tint.boneDim, 11, 500);
+    }
+  }
+
+  // footer — progress + team credit, matching the boot screen
+  if (levels.length > 0) {
+    label(ctx, `progress · ${cleared}/${levels.length} regions stabilised`, VIEW_W / 2, 556, tint.greenDim, 11, 500, 'center');
+  }
+  label(
+    ctx,
+    'Three-Way Merge — Gabriel Felipe Guarnieri · Hector Guarçoni Machado · Marcos Winícios Silva Martins',
+    VIEW_W / 2,
+    578,
+    tint.boneDim,
+    11,
+    500,
+    'center',
+  );
+
+  applyBloom(ctx);
 }

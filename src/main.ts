@@ -1,6 +1,16 @@
 import { Game, type Mode } from './game';
 import type { ButtonId } from './render';
-import { draw, drawTitle, isNodeKind, layoutButtons, layoutMuteButton, layoutRail } from './render';
+import {
+  draw,
+  drawMenu,
+  drawTitle,
+  isNodeKind,
+  layoutButtons,
+  layoutLevelSelect,
+  layoutMenuButton,
+  layoutMuteButton,
+  layoutRail,
+} from './render';
 import { images } from './images';
 import * as audio from './audio';
 import * as progress from './progress';
@@ -34,13 +44,35 @@ const makeGame = (i: number): Game => {
   return g;
 };
 let game = makeGame(levelIndex);
-// Cleared-level count for the title screen, sampled at load (the title only
-// shows before any play, so it never needs to update mid-session).
-const titleCleared = progress.clearedCount(levelIds);
 const mouse: Point = { x: 0, y: 0 };
 
-// The game opens on the boot/title screen; the first click or Enter starts L01.
-let booted = false;
+// Screen flow: the boot/title intro plays first, then a level-select menu the
+// presenter can jump from into any level, then the level itself. Esc / the rail
+// "menu" affordance returns to the menu. Cosmetic state only — never the sim.
+type Screen = 'boot' | 'menu' | 'play';
+let screen: Screen = 'boot';
+
+// Per-level saved bests + cleared count, sampled fresh each time the menu opens
+// so a level cleared this session shows its new tier on return.
+let menuRecords: (progress.LevelRecord | null)[] = LEVELS.map((l) => progress.recordFor(l.id));
+let menuCleared = progress.clearedCount(levelIds);
+
+/** Refresh the menu's saved-best readout and show the level select. */
+function openMenu(): void {
+  menuRecords = LEVELS.map((l) => progress.recordFor(l.id));
+  menuCleared = progress.clearedCount(levelIds);
+  screen = 'menu';
+}
+
+/** Enter a level from the menu (reuses the same level-load path as Next). */
+function startLevel(i: number): void {
+  if (i < 0 || i >= LEVELS.length) return;
+  levelIndex = i;
+  game = makeGame(levelIndex);
+  screen = 'play';
+  audio.sfx.tool();
+}
+
 canvas.style.cursor = 'pointer';
 
 function toLogical(e: MouseEvent): Point {
@@ -64,16 +96,25 @@ function handleButton(id: ButtonId): void {
 }
 
 function onDown(p: Point): void {
-  if (!booted) {
-    booted = true;
+  if (screen === 'boot') {
     audio.unlock();
     audio.sfx.boot();
+    openMenu();
+    return;
+  }
+  if (screen === 'menu') {
+    const card = layoutLevelSelect(LEVELS.length).find((c) => pointInRect(p.x, p.y, c.rect));
+    if (card) startLevel(card.index);
     return;
   }
   game.flash = null;
 
   // component / tool rail
   if (p.x <= RAIL_W) {
+    if (pointInRect(p.x, p.y, layoutMenuButton())) {
+      openMenu();
+      return;
+    }
     if (pointInRect(p.x, p.y, layoutMuteButton())) {
       audio.toggleMuted();
       return;
@@ -153,7 +194,7 @@ function onDown(p: Point): void {
 function onMove(p: Point): void {
   mouse.x = p.x;
   mouse.y = p.y;
-  if (!booted) {
+  if (screen !== 'play') {
     canvas!.style.cursor = 'pointer';
     return;
   }
@@ -201,20 +242,31 @@ canvas.addEventListener('mousedown', (e) => onDown(toLogical(e)));
 canvas.addEventListener('mousemove', (e) => onMove(toLogical(e)));
 window.addEventListener('mouseup', onUp);
 window.addEventListener('keydown', (e) => {
-  if (!booted) {
+  if (screen === 'boot') {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      booted = true;
       audio.unlock();
       audio.sfx.boot();
+      openMenu();
     }
+    return;
+  }
+  if (screen === 'menu') {
+    // number keys jump straight to a level — keyboard-reachable so a live demo
+    // never has to fumble a click.
+    if (e.key >= '1' && e.key <= '9') startLevel(Number(e.key) - 1);
     return;
   }
   if (e.key === 'm' || e.key === 'M') {
     audio.toggleMuted();
   } else if (e.key === 'Escape') {
-    game.wireFromId = null;
-    game.selectedNodeId = null;
+    // clear a pending wire/selection first; a "clean" Esc returns to the menu.
+    if (game.wireFromId || game.selectedNodeId) {
+      game.wireFromId = null;
+      game.selectedNodeId = null;
+    } else {
+      openMenu();
+    }
   } else if ((e.key === 'p' || e.key === 'P' || e.key === ' ') && game.mode === 'running') {
     e.preventDefault();
     audio.sfx[game.togglePause() ? 'pause' : 'resume']();
@@ -237,9 +289,15 @@ let prevPlayhead = 0;
 let lastAlarm = 0;
 
 function frame(ts: number): void {
-  if (!booted) {
-    drawTitle(ctx!, images, ts, titleCleared, levelIds.length);
+  if (screen === 'boot') {
+    drawTitle(ctx!, images, ts, menuCleared, levelIds.length);
     last = ts; // keep the first gameplay frame's dt sane
+    requestAnimationFrame(frame);
+    return;
+  }
+  if (screen === 'menu') {
+    drawMenu(ctx!, images, LEVELS, menuRecords, mouse, menuCleared);
+    last = ts;
     requestAnimationFrame(frame);
     return;
   }
