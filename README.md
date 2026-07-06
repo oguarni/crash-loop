@@ -55,6 +55,14 @@ ingress ──> load-balancer ──┬──> service
 3 services × 10 = 30 req/tick (zero drops), at **$4.50** — which also clears the
 gold tier (`parCost`).
 
+### Screen flow
+
+The boot/title screen leads into a **level-select menu** — every level is a card
+showing its saved best, so a presenter can jump straight into any scenario
+(click a card, or press its **number key** `1`–`7`). Inside a level, the rail's
+**`< menu`** affordance or a clean `Esc` returns to the select screen; you no
+longer have to clear levels in sequence to reach the later ones.
+
 ### Controls
 
 | Action  | How |
@@ -65,18 +73,30 @@ gold tier (`parCost`).
 | Delete  | Select **delete**, click a node or an edge |
 | Run     | **Run >** (or `Enter`) — simulate the traffic profile and score it |
 | Pause   | **Pause** (or `Space` / `P`) freezes a running sim; **Resume** continues |
-| Cancel  | `Esc` cancels an in-progress wire |
+| Help    | `?` or `H` toggles an in-game help / legend overlay (controls + the node kinds this level uses) |
+| Mute    | `M` (or the rail's mute affordance) toggles all audio, including the ambient hum |
+| Cancel / back | `Esc` cancels an in-progress wire or clears a selection; a clean `Esc` returns to the level menu |
 
 Clear a level and a **Next >** button appears on the result banner to advance.
 
 ## Scoring & progress
 
 Each run is graded into a tier — **FAIL**, **PASS** (error budget held), or **GOLD**
-(also at or under `parCost`). The best tier and the lowest passing cost are kept
-per level in `localStorage`, so a cleared scenario shows its saved best on the
-result banner and in the rail, and a run that beats the record flags a **NEW
-BEST**. The title screen reports how many regions you've stabilised. Scoring is
-meta state only — it never feeds the deterministic simulation.
+(also at or under `parCost`). Beyond the tier, a run is scored on **three axes**,
+surfaced side by side on the result banner and carried as saved bests in the rail:
+
+- **cost** — the dollar total of the topology (always live);
+- **cycles** — request-ticks spent waiting in a buffer, so it only matters where a
+  **queue** exists; other levels show a clean `—` rather than a misleading `0`;
+- **coverage** — the share of traffic that passed through a **CI gate**, live only
+  where a gate is present (or required).
+
+The best tier and the best of each relevant axis are kept per level in
+`localStorage`, so a cleared scenario shows its saved bests on return, and a run
+that beats a record flags a **NEW BEST**. Verdicts are never signalled by colour
+alone — a tier always pairs with a word (PASS / FAIL / GOLD). The title screen
+reports how many regions you've stabilised. Scoring is meta state only — it never
+feeds the deterministic simulation.
 
 ## L02 — "first deploy"
 
@@ -203,6 +223,39 @@ drain rate, so nothing is dropped, at **$4.00** (gold). A single downstream
 service can't keep up with the queue's own drain and fails. Requests still
 buffered when the run ends count as dropped — you must drain in time.
 
+## L07 — "black friday"
+
+The finale. It stacks every mechanic the campaign taught into one topology, so
+all three scoring axes are live at once. Peak read traffic sits at **32 req/tick**,
+bursts to **56 for eight ticks** (the Black Friday spike), then eases back over a
+long recovery tail; two seeded incidents knock a replica out mid-run.
+
+- **cache** halves the heavy read load, so you provision for the misses, not the
+  full arrival rate — without it the downstream is unaffordable;
+- **queue** soaks the burst and bleeds the backlog off across the quiet ticks
+  (this is the **cycles** axis — request-ticks spent waiting);
+- **ci-gate** is required before every replica (`requireBeforeSinks: ['gate']`),
+  which drives **coverage** to 100%;
+- **chaos** (as in L05) sheds a replica's share during each incident, so you
+  spread the load across enough replicas to stay inside the error budget.
+- Budget caps you at **$9.00 / 10 CPU / 12 MEM**; the error budget is 52.
+
+The dominant correct topology:
+
+```
+ingress ──> cache ──> queue ──> ci-gate ──┬──> service
+                                          ├──> service
+                                          ├──> service
+                                          └──> service
+```
+
+The cache halves the reads, the queue drains ≤20/tick and holds the burst, the
+gate forwards ≤20 to four replicas carrying ~4–5 req/tick each — so losing one
+to an incident sheds only its small share: 45 dropped, inside the 52 error
+budget, at **$8.00 / 768 cycles / 100% coverage** (gold). Three replicas shed too
+big a share on a crash (60 dropped) and fail; a fifth replica clears the drops
+but breaches the cost par.
+
 ## Architecture
 
 ```
@@ -221,6 +274,7 @@ src/
     L04.ts          "error budget"  — traffic spike, tight budget
     L05.ts          "chaos friday"  — seeded incident injection
     L06.ts          "back-pressure" — queue node (cross-tick buffering)
+    L07.ts          "black friday"  — finale: cache + queue + gate + chaos
     index.ts        level register (played in order)
   game.ts           board state, editing rules, run/playback (framework-agnostic)
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
@@ -251,14 +305,22 @@ scripts/
 ## Roadmap
 
 **Shipped:** L01 — boot · L02 — first deploy · L03 — flapping cart · L04 — error
-budget · L05 — chaos friday · L06 — back-pressure. All six roadmap node kinds are
-live: `ingress`, `load-balancer`, `service`, `ci-gate`, `cache`, `queue`.
+budget · L05 — chaos friday · L06 — back-pressure · L07 — black friday (finale).
+All six roadmap node kinds are live: `ingress`, `load-balancer`, `service`,
+`ci-gate`, `cache`, `queue`. Also shipped:
+
+- **Level select** — a title-screen menu to jump into any scenario, no longer
+  gated behind clearing levels in order.
+- **Multi-axis scoring** — cost, cycles, and coverage surfaced side by side on
+  the result banner and rail.
+- **In-game help / legend** — a `?` / `H` overlay with the controls and the node
+  kinds each level uses.
+- **Terminal polish** — CRT vignette + contrast pass and a low ambient hum;
+  IBM Plex Mono is now self-hosted, so a live demo needs no network at all.
 
 **Planned:**
 
-- **Multi-axis scoring** — add cycles and test coverage alongside the cost axis.
 - **Infrastructure as Code** — declare part of a topology from a script/template.
 - **Narrative & NPCs** — diegetic incident briefings and the senior SRE mentor.
 - **Thematic campaign** — group levels into worlds (Ingress, Queues, Services,
   CI/CD, Data/Cache, SRE panel) with boss scenarios.
-- **Terminal polish** — CRT glow and an ambient soundtrack.
