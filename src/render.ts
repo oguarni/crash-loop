@@ -342,8 +342,10 @@ function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number, flowTime
   // brief at the top (wrapped so long text never overflows), hint at the bottom
   const briefX = WORK_LEFT + 16;
   const briefMaxW = VIEW_W - briefX - 16;
-  labelWrapped(ctx, `${game.level.id} ${game.level.name} — ${game.level.brief}`, briefX, 26, briefMaxW, tint.boneDim, 11, 500, 15);
-  label(ctx, `hint: ${game.level.hint}`, WORK_LEFT + 16, WORK_BOTTOM - 14, tint.greenDim, 11, 400);
+  labelWrapped(ctx, `${game.level.id} ${game.level.name} — ${game.level.brief}`, briefX, 28, briefMaxW, tint.boneDim, 12, 500, 16);
+  // Hint wraps to the work width (up to two lines anchored above the HUD) so a
+  // long hint stays readable instead of clipping off the right edge of the canvas.
+  labelWrapped(ctx, `hint: ${game.level.hint}`, WORK_LEFT + 16, WORK_BOTTOM - 30, VIEW_W - WORK_LEFT - 32, tint.greenDim, 12, 500, 15);
 
   const tick = displayTick(game);
   drawEdges(ctx, game, tick, flowTime);
@@ -521,9 +523,9 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
     const titleColor = downed ? tint.red : overloaded ? palette.amber : palette.bone;
     label(ctx, `${spec.glyph} ${spec.label}`, node.x, node.y - 4, titleColor, 12, 600, 'center');
     if (downed) {
-      label(ctx, '! down', node.x, node.y + 13, tint.red, 11, 700, 'center');
+      label(ctx, '! down', node.x, node.y + 14, tint.red, 12, 700, 'center');
     } else {
-      label(ctx, nodeStat(game, node, tick), node.x, node.y + 13, overloaded || queuing ? palette.amber : tint.greenDim, 11, 500, 'center');
+      label(ctx, nodeStat(game, node, tick), node.x, node.y + 14, overloaded || queuing ? palette.amber : tint.greenDim, 12, 500, 'center');
     }
 
     ctx.restore();
@@ -549,7 +551,7 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   const textX = ready(imgs.icon) ? 14 + badge + 9 : 14;
   if (ready(imgs.icon)) ctx.drawImage(imgs.icon, 14, 13, badge, badge);
   label(ctx, 'crash-loop', textX, 30, palette.green, 17, 700);
-  label(ctx, `${game.level.id} · ${game.level.name}`, textX, 48, tint.boneDim, 11, 500);
+  label(ctx, `${game.level.id} · ${game.level.name}`, textX, 48, tint.boneDim, 12, 500);
 
   // saved best for this level, shown when replaying a cleared scenario — the
   // same multi-axis bests the result banner reports, condensed onto one line.
@@ -561,8 +563,8 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
     if (rec.bestCost != null) parts.push(`$${rec.bestCost.toFixed(2)}`);
     if (ax.cycles && rec.bestCycles != null) parts.push(`⟳${rec.bestCycles}`);
     if (ax.coverage && rec.bestCoverage != null) parts.push(`${Math.round(rec.bestCoverage * 100)}%`);
-    label(ctx, '*', 14, 64, col, 11, 700);
-    label(ctx, parts.join(' · '), 26, 64, tint.boneDim, 10, 500);
+    label(ctx, '*', 14, 64, col, 12, 700);
+    label(ctx, parts.join(' · '), 26, 64, tint.boneDim, 11, 500);
   }
 
   // back-to-menu affordance (also the Esc key)
@@ -571,15 +573,15 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   ctx.lineWidth = 1;
   rrect(ctx, menuBtn, 5);
   ctx.stroke();
-  label(ctx, '<', menuBtn.x + 10, menuBtn.y + 14, palette.green, 11, 700);
-  label(ctx, 'menu', menuBtn.x + 26, menuBtn.y + 14, tint.boneDim, 11, 500);
-  label(ctx, 'Esc', menuBtn.x + menuBtn.w - 10, menuBtn.y + 14, tint.greenDim, 10, 600, 'right');
+  label(ctx, '<', menuBtn.x + 10, menuBtn.y + 14, palette.green, 12, 700);
+  label(ctx, 'menu', menuBtn.x + 26, menuBtn.y + 14, tint.boneDim, 12, 500);
+  label(ctx, 'Esc', menuBtn.x + menuBtn.w - 10, menuBtn.y + 14, tint.greenDim, 11, 600, 'right');
 
   const items = layoutRail(game);
   const firstComp = items.find((i) => isNodeKind(i.tool));
   const firstTool = items.find((i) => i.tool === 'move');
-  if (firstComp) label(ctx, 'COMPONENTS', 14, firstComp.rect.y - 12, tint.boneDim, 10, 600);
-  if (firstTool) label(ctx, 'TOOLS', 14, firstTool.rect.y - 12, tint.boneDim, 10, 600);
+  if (firstComp) label(ctx, 'COMPONENTS', 14, firstComp.rect.y - 12, tint.boneDim, 11, 700);
+  if (firstTool) label(ctx, 'TOOLS', 14, firstTool.rect.y - 12, tint.boneDim, 11, 700);
 
   for (const item of items) {
     const selected = game.tool === item.tool;
@@ -594,13 +596,13 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
     ctx.stroke();
 
     const cy = item.rect.y + (item.cost !== undefined ? 19 : item.rect.h / 2 + 4);
-    label(ctx, item.glyph, item.rect.x + 12, cy, selected ? palette.green : palette.bone, 13, 700);
-    label(ctx, item.label, item.rect.x + 40, cy, selected ? palette.bone : tint.boneDim, 12, 500);
+    label(ctx, item.glyph, item.rect.x + 12, cy, selected ? palette.green : palette.bone, 14, 700);
+    label(ctx, item.label, item.rect.x + 40, cy, selected ? palette.bone : tint.boneDim, 12, 600);
 
     if (item.cost !== undefined) {
       const spec = NODE_SPECS[item.tool as NodeKind];
-      label(ctx, `$${item.cost.toFixed(2)}`, item.rect.x + item.rect.w - 10, item.rect.y + 19, palette.amber, 11, 600, 'right');
-      label(ctx, `cpu ${spec.cpu} · mem ${spec.mem}`, item.rect.x + 40, item.rect.y + 37, tint.greenDim, 10, 400);
+      label(ctx, `$${item.cost.toFixed(2)}`, item.rect.x + item.rect.w - 10, item.rect.y + 19, palette.amber, 11, 700, 'right');
+      label(ctx, `cpu ${spec.cpu} · mem ${spec.mem}`, item.rect.x + 40, item.rect.y + 37, tint.greenDim, 11, 500);
     }
   }
 
@@ -611,17 +613,17 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   ctx.lineWidth = 1;
   rrect(ctx, mb, 5);
   ctx.stroke();
-  label(ctx, on ? '[*]' : '[ ]', mb.x + 10, mb.y + 14, on ? palette.green : tint.boneDim, 11, 700);
-  label(ctx, on ? 'sound on' : 'sound off', mb.x + 38, mb.y + 14, tint.boneDim, 11, 500);
-  label(ctx, 'M', mb.x + mb.w - 10, mb.y + 14, tint.greenDim, 10, 600, 'right');
+  label(ctx, on ? '[*]' : '[ ]', mb.x + 10, mb.y + 14, on ? palette.green : tint.boneDim, 12, 700);
+  label(ctx, on ? 'sound on' : 'sound off', mb.x + 38, mb.y + 14, tint.boneDim, 12, 500);
+  label(ctx, 'M', mb.x + mb.w - 10, mb.y + 14, tint.greenDim, 11, 600, 'right');
 }
 
 // --- hud -----------------------------------------------------------------------
 
 function drawGauge(ctx: Ctx, x: number, y: number, w: number, name: string, value: string, ratio: number, over: boolean): void {
   const color = over ? tint.red : palette.green;
-  label(ctx, name, x, y, tint.boneDim, 10, 600);
-  label(ctx, value, x + w, y, color, 11, 600, 'right');
+  label(ctx, name, x, y, tint.boneDim, 11, 700);
+  label(ctx, value, x + w, y, color, 12, 700, 'right');
   ctx.fillStyle = tint.charcoalDim;
   ctx.fillRect(x, y + 6, w, 4);
   ctx.fillStyle = color;
@@ -641,13 +643,13 @@ function drawHud(ctx: Ctx, game: Game): void {
   const u = game.usage();
   const b = game.level.budgets;
   const gy = WORK_BOTTOM + 22;
-  const gw = 96;
+  const gw = 104;
   drawGauge(ctx, 16, gy, gw, 'CPU', `${u.cpu}/${b.cpu}`, u.cpu / b.cpu, u.cpu > b.cpu);
   drawGauge(ctx, 128, gy, gw, 'MEM', `${u.mem}/${b.mem}`, u.mem / b.mem, u.mem > b.mem);
   drawGauge(ctx, 240, gy, gw, 'COST', `$${u.cost.toFixed(2)}/${b.cost.toFixed(2)}`, u.cost / b.cost, u.cost > b.cost);
 
   const dropped = game.mode === 'edit' ? 0 : game.mode === 'running' ? game.droppedSoFar() : (game.sim?.totalDropped ?? 0);
-  drawGauge(ctx, 352, gy, gw, 'ERR_BUDGET', `${dropped}/${game.level.errorBudget}`, dropped / game.level.errorBudget, dropped > game.level.errorBudget);
+  drawGauge(ctx, 352, gy, gw, 'ERRORS', `${dropped}/${game.level.errorBudget}`, dropped / game.level.errorBudget, dropped > game.level.errorBudget);
 
   // center status line (clipped so it never collides with the buttons)
   const buttons = layoutButtons(game);
@@ -680,7 +682,7 @@ function drawHud(ctx: Ctx, game: Game): void {
     status = game.result.gold ? 'GOLD' : game.result.passed ? 'PASS' : 'FAIL';
     statusColor = game.result.passed ? palette.green : tint.red;
   }
-  label(ctx, status, statusX, gy + 6, statusColor, 12, 600);
+  label(ctx, status, statusX, gy + 6, statusColor, 13, 600);
   ctx.restore();
 
   drawButtons(ctx, buttons);
@@ -721,9 +723,9 @@ function levelAxes(game: Game): { cycles: boolean; coverage: boolean } {
 
 /** One axis column on the result banner: name, this run's value, saved best. */
 function drawAxis(ctx: Ctx, x: number, y: number, name: string, value: string, best: string, hot: boolean): void {
-  label(ctx, name, x, y, tint.boneDim, 10, 600);
-  label(ctx, value, x, y + 17, hot ? palette.green : palette.bone, 15, 700);
-  label(ctx, best, x, y + 33, tint.greenDim, 10, 500);
+  label(ctx, name, x, y, tint.boneDim, 11, 700);
+  label(ctx, value, x, y + 18, hot ? palette.green : palette.bone, 16, 700);
+  label(ctx, best, x, y + 34, tint.greenDim, 11, 500);
 }
 
 function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
@@ -760,10 +762,10 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
     ctx.fillStyle = palette.green;
     rrect(ctx, chip, 6);
     ctx.fill();
-    label(ctx, 'NEW BEST', chip.x + chip.w / 2, chip.y + 14, palette.navy, 10, 700, 'center');
+    label(ctx, 'NEW BEST', chip.x + chip.w / 2, chip.y + 14, palette.navy, 11, 700, 'center');
   }
 
-  label(ctx, res.message, x + 24, y + 58, palette.bone, 12, 500);
+  label(ctx, res.message, x + 24, y + 58, palette.bone, 13, 500);
 
   // three scoring axes (cost / cycles / coverage), each with its saved best.
   // Only passing runs record a best, and the NEW BEST chip flags an improvement;
@@ -786,7 +788,7 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   const covBest = !ax.coverage ? '—' : rec?.bestCoverage != null ? `best ${Math.round(rec.bestCoverage * 100)}%` : 'best —';
   drawAxis(ctx, c2, ay, 'COVERAGE', covVal, covBest, game.newBest && ax.coverage);
 
-  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 138, tint.greenDim, 11, 400);
+  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 138, tint.greenDim, 12, 500);
   ctx.restore();
 }
 
@@ -816,7 +818,7 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
   ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-  const panel: Rect = { x: 168, y: 44, w: 624, h: 500 };
+  const panel: Rect = { x: 156, y: 34, w: 648, h: 536 };
   ctx.fillStyle = tint.panel;
   rrect(ctx, panel, 12);
   ctx.fill();
@@ -826,16 +828,16 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
   ctx.stroke();
 
   const px = panel.x + 28;
-  label(ctx, 'HELP / LEGEND', px, panel.y + 36, palette.green, 18, 700);
-  label(ctx, `${game.level.id} · ${game.level.name}`, panel.x + panel.w - 28, panel.y + 36, tint.boneDim, 12, 500, 'right');
+  label(ctx, 'HELP / LEGEND', px, panel.y + 38, palette.green, 19, 700);
+  label(ctx, `${game.level.id} · ${game.level.name}`, panel.x + panel.w - 28, panel.y + 38, tint.boneDim, 13, 600, 'right');
 
   // controls
-  label(ctx, 'CONTROLS', px, panel.y + 68, tint.boneDim, 11, 600);
-  let cy = panel.y + 90;
+  label(ctx, 'CONTROLS', px, panel.y + 70, tint.boneDim, 12, 700);
+  let cy = panel.y + 94;
   for (const [key, desc] of HELP_CONTROLS) {
-    label(ctx, key, px, cy, palette.bone, 12, 700);
-    label(ctx, desc, px + 132, cy, tint.boneDim, 12, 500);
-    cy += 20;
+    label(ctx, key, px, cy, palette.bone, 13, 700);
+    label(ctx, desc, px + 150, cy, tint.boneDim, 13, 500);
+    cy += 22;
   }
 
   // node legend — only the kinds this level actually uses
@@ -844,16 +846,72 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
     if (!kinds.includes(k)) kinds.push(k);
   }
   cy += 14;
-  label(ctx, 'COMPONENTS IN THIS LEVEL', px, cy, tint.boneDim, 11, 600);
-  cy += 22;
+  label(ctx, 'COMPONENTS IN THIS LEVEL', px, cy, tint.boneDim, 12, 700);
+  cy += 24;
   for (const kind of kinds) {
     const spec = NODE_SPECS[kind];
-    label(ctx, `${spec.glyph} ${spec.label}`, px, cy, palette.green, 12, 700);
-    const end = labelWrapped(ctx, spec.description, px + 132, cy, panel.w - 132 - 56, tint.boneDim, 12, 500, 15);
-    cy = Math.max(cy + 20, end + 12);
+    label(ctx, `${spec.glyph} ${spec.label}`, px, cy, palette.green, 13, 700);
+    const end = labelWrapped(ctx, spec.description, px + 150, cy, panel.w - 150 - 56, tint.boneDim, 13, 500, 16);
+    cy = Math.max(cy + 22, end + 12);
   }
 
-  label(ctx, 'press ? or Esc to close', panel.x + panel.w / 2, panel.y + panel.h - 18, tint.greenDim, 11, 500, 'center');
+  label(ctx, 'press ? or Esc to close', panel.x + panel.w / 2, panel.y + panel.h - 18, tint.greenDim, 12, 500, 'center');
+  ctx.restore();
+}
+
+// --- tutorial overlay ----------------------------------------------------------
+
+// The friendly, skippable "how to play" shown before the first game and reopenable
+// any time with T. Distinct from the ? help/legend (which is the full controls +
+// per-level node reference): this is the goal-and-core-loop onboarding, in big
+// readable text. Cosmetic only — it never touches the deterministic simulation.
+const TUTORIAL_STEPS: Array<[string, string]> = [
+  ['1 · GOAL', "You're the on-call SRE. Each region hands you a failing system — compose a topology that survives the incoming traffic inside its error budget and its resource budget."],
+  ['2 · BUILD', 'Pick a component from the left rail, then click the board to place it. Choose the wire tool, click a source node then a target to connect them. All traffic starts at ingress.'],
+  ['3 · RUN', 'Press Run (or Enter) to simulate the traffic. Watch the requests flow: an overloaded node glows amber, and a crashed replica glows red and drops its share.'],
+  ['4 · SCORE', 'Keep drops within the error budget to PASS; hit the par cost for GOLD. Every run is also graded on three scores — cost, cycles (waiting in a queue) and coverage (behind a CI gate).'],
+];
+
+/** Full-screen tutorial. Any click / Esc / T dismisses it (handled by the input
+ *  layer); this only draws. Reads no game state, so it is safe over menu or play. */
+export function drawTutorial(ctx: Ctx): void {
+  ctx.save();
+  ctx.fillStyle = 'rgba(11, 16, 32, 0.94)';
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  const panel: Rect = { x: 150, y: 36, w: 660, h: 528 };
+  ctx.fillStyle = tint.panel;
+  rrect(ctx, panel, 12);
+  ctx.fill();
+  ctx.strokeStyle = palette.green;
+  ctx.lineWidth = 1.5;
+  rrect(ctx, panel, 12);
+  ctx.stroke();
+
+  const px = panel.x + 34;
+  const maxW = panel.w - 34 * 2;
+  label(ctx, 'HOW TO PLAY', px, panel.y + 46, palette.green, 22, 700);
+  label(ctx, 'crash-loop — keep a cloud running under load', px + 200, panel.y + 46, tint.boneDim, 13, 500);
+
+  let cy = panel.y + 96;
+  for (const [head, body] of TUTORIAL_STEPS) {
+    label(ctx, head, px, cy, palette.amber, 15, 700);
+    const end = labelWrapped(ctx, body, px, cy + 21, maxW, tint.boneDim, 14, 500, 19);
+    cy = end + 26;
+  }
+
+  // Start / Skip button (purely an affordance — any click closes the tutorial).
+  const btn: Rect = { x: VIEW_W / 2 - 92, y: 506, w: 184, h: 38 };
+  ctx.fillStyle = tint.greenDim;
+  rrect(ctx, btn, 8);
+  ctx.fill();
+  ctx.strokeStyle = palette.green;
+  ctx.lineWidth = 1.4;
+  rrect(ctx, btn, 8);
+  ctx.stroke();
+  label(ctx, 'Start >', btn.x + btn.w / 2, btn.y + btn.h / 2 + 5, palette.bone, 15, 700, 'center');
+
+  label(ctx, 'Skip (Esc) · reopen any time with T · press ? in a level for the full controls', VIEW_W / 2, panel.y + panel.h - 14, tint.greenDim, 12, 500, 'center');
   ctx.restore();
 }
 
@@ -922,7 +980,7 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
   ctx.beginPath();
   ctx.arc(cx - 50, card.y + card.h + 18, 3, 0, Math.PI * 2);
   ctx.fill();
-  label(ctx, 'on call: you', cx + 4, card.y + card.h + 22, tint.boneDim, 12, 600, 'center');
+  label(ctx, 'on call: you', cx + 4, card.y + card.h + 22, tint.boneDim, 13, 600, 'center');
 
   // wordmark
   if (ready(imgs.logo)) {
@@ -947,11 +1005,11 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
       ctx.save();
       ctx.globalAlpha = Math.min(1, appear);
       const [tag, rest] = bootLines[i];
-      label(ctx, tag, lx, ly, palette.green, 12, 600);
-      ctx.font = font(12, 600);
+      label(ctx, tag, lx, ly, palette.green, 13, 600);
+      ctx.font = font(13, 600);
       ctx.textAlign = 'left';
       const tagW = ctx.measureText(tag + '  ').width;
-      label(ctx, rest, lx + tagW, ly, tint.boneDim, 12, 500);
+      label(ctx, rest, lx + tagW, ly, tint.boneDim, 13, 500);
       ctx.restore();
     }
     ly += 22;
@@ -969,12 +1027,12 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
       ctx.fillStyle = palette.green;
       ctx.fillRect(lx + promptW, py - 13, 10, 16);
     }
-    label(ctx, 'or click anywhere', lx, py + 22, tint.greenDim, 12, 400);
+    label(ctx, 'or click anywhere', lx, py + 22, tint.greenDim, 13, 500);
   }
 
   // saved progress, once the boot log has printed
   if (total > 0 && elapsed > linesStart + bootLines.length * lineGap) {
-    label(ctx, `progress · ${cleared}/${total} regions stabilised`, VIEW_W / 2, 556, tint.greenDim, 11, 500, 'center');
+    label(ctx, `progress · ${cleared}/${total} regions stabilised`, VIEW_W / 2, 556, tint.greenDim, 12, 500, 'center');
   }
 
   // team credit
@@ -984,7 +1042,7 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
     VIEW_W / 2,
     578,
     tint.boneDim,
-    11,
+    12,
     500,
     'center',
   );
@@ -1091,7 +1149,7 @@ export function drawMenu(
   } else {
     label(ctx, 'crash-loop', VIEW_W / 2, 96, palette.green, 30, 700, 'center');
   }
-  label(ctx, 'select a region — click a card or press 1–' + levels.length, VIEW_W / 2, 162, tint.boneDim, 13, 500, 'center');
+  label(ctx, 'select a region — click a card or press 1–' + levels.length + '   ·   press T for tutorial', VIEW_W / 2, 162, tint.boneDim, 14, 500, 'center');
 
   const cards = layoutLevelSelect(levels.length);
   for (const c of cards) {
@@ -1127,22 +1185,22 @@ export function drawMenu(
 
     const tx = r.x + 56;
     const tw = r.w - 56 - 16;
-    label(ctx, `${lvl.id} · ${lvl.name}`, tx, r.y + 26, palette.bone, 14, 700);
-    label(ctx, truncate(ctx, lvl.brief, tw, 10, 400), tx, r.y + 44, tint.boneDim, 10, 400);
+    label(ctx, `${lvl.id} · ${lvl.name}`, tx, r.y + 27, palette.bone, 15, 700);
+    label(ctx, truncate(ctx, lvl.brief, tw, 11, 400), tx, r.y + 46, tint.boneDim, 11, 400);
 
     // status line: saved tier + best cost, or a subtle locked marker
     if (isCleared) {
       const mark = gold ? '[*] GOLD' : '[+] PASS';
       const best = rec?.bestCost != null ? ` · $${rec.bestCost.toFixed(2)}` : '';
-      label(ctx, `${mark}${best}`, tx, r.y + 66, accent, 11, 700);
+      label(ctx, `${mark}${best}`, tx, r.y + 67, accent, 12, 700);
     } else {
-      label(ctx, '[ ] not cleared', tx, r.y + 66, tint.boneDim, 11, 500);
+      label(ctx, '[ ] not cleared', tx, r.y + 67, tint.boneDim, 12, 500);
     }
   }
 
   // footer — progress + team credit, matching the boot screen
   if (levels.length > 0) {
-    label(ctx, `progress · ${cleared}/${levels.length} regions stabilised`, VIEW_W / 2, 556, tint.greenDim, 11, 500, 'center');
+    label(ctx, `progress · ${cleared}/${levels.length} regions stabilised`, VIEW_W / 2, 556, tint.greenDim, 12, 500, 'center');
   }
   label(
     ctx,
@@ -1150,7 +1208,7 @@ export function drawMenu(
     VIEW_W / 2,
     578,
     tint.boneDim,
-    11,
+    12,
     500,
     'center',
   );

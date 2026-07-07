@@ -5,6 +5,7 @@ import {
   drawHelpOverlay,
   drawMenu,
   drawTitle,
+  drawTutorial,
   isNodeKind,
   layoutButtons,
   layoutLevelSelect,
@@ -57,6 +58,27 @@ let screen: Screen = 'boot';
 // but never mutates it, and the input layer swallows clicks while it's open.
 let helpOpen = false;
 
+// Tutorial overlay (the T key). Auto-shown once before the first game (first-run
+// state tracked in localStorage) and reopenable at any time. Cosmetic: it reads
+// nothing from the sim, and the input layer swallows other input while it's open.
+const TUT_KEY = 'crash-loop.tut.v1';
+let tutorialOpen = false;
+function tutorialSeen(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem(TUT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function closeTutorial(): void {
+  tutorialOpen = false;
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(TUT_KEY, '1');
+  } catch {
+    /* quota / denied — best effort */
+  }
+}
+
 // Per-level saved bests + cleared count, sampled fresh each time the menu opens
 // so a level cleared this session shows its new tier on return.
 let menuRecords: (progress.LevelRecord | null)[] = LEVELS.map((l) => progress.recordFor(l.id));
@@ -105,6 +127,12 @@ function onDown(p: Point): void {
     audio.unlock();
     audio.sfx.boot();
     openMenu();
+    if (!tutorialSeen()) tutorialOpen = true; // first run: greet with the tutorial
+    return;
+  }
+  // a click anywhere dismisses the tutorial (drawn over the menu or a level)
+  if (tutorialOpen) {
+    closeTutorial();
     return;
   }
   if (screen === 'menu') {
@@ -253,11 +281,20 @@ canvas.addEventListener('mousemove', (e) => onMove(toLogical(e)));
 window.addEventListener('mouseup', onUp);
 window.addEventListener('keydown', (e) => {
   if (screen === 'boot') {
-    if (e.key === 'Enter' || e.key === ' ') {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 't' || e.key === 'T') {
       e.preventDefault();
       audio.unlock();
       audio.sfx.boot();
       openMenu();
+      if (e.key === 't' || e.key === 'T' || !tutorialSeen()) tutorialOpen = true;
+    }
+    return;
+  }
+  // the tutorial swallows every key but its own close keys (Esc / T / Enter / Space)
+  if (tutorialOpen) {
+    if (e.key === 'Escape' || e.key === 't' || e.key === 'T' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      closeTutorial();
     }
     return;
   }
@@ -265,6 +302,7 @@ window.addEventListener('keydown', (e) => {
     // number keys jump straight to a level — keyboard-reachable so a live demo
     // never has to fumble a click.
     if (e.key >= '1' && e.key <= '9') startLevel(Number(e.key) - 1);
+    else if (e.key === 't' || e.key === 'T') tutorialOpen = true;
     return;
   }
   // while help is open it swallows every gameplay key, so a run can't be paused,
@@ -275,6 +313,8 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.key === '?' || e.key === 'h' || e.key === 'H') {
     helpOpen = true;
+  } else if (e.key === 't' || e.key === 'T') {
+    tutorialOpen = true;
   } else if (e.key === 'm' || e.key === 'M') {
     audio.toggleMuted();
   } else if (e.key === 'Escape') {
@@ -315,6 +355,7 @@ function frame(ts: number): void {
   }
   if (screen === 'menu') {
     drawMenu(ctx!, images, LEVELS, menuRecords, mouse, menuCleared);
+    if (tutorialOpen) drawTutorial(ctx!);
     last = ts;
     requestAnimationFrame(frame);
     return;
@@ -373,6 +414,7 @@ function frame(ts: number): void {
 
   draw(ctx!, game, mouse, ts, images, flowTime);
   if (helpOpen) drawHelpOverlay(ctx!, game);
+  if (tutorialOpen) drawTutorial(ctx!);
   requestAnimationFrame(frame);
 }
 
