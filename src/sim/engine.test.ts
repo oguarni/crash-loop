@@ -8,6 +8,7 @@ import { L03 } from '../levels/L03';
 import { L04 } from '../levels/L04';
 import { L05 } from '../levels/L05';
 import { L06 } from '../levels/L06';
+import { L07 } from '../levels/L07';
 
 // Board fixtures shared across the suites. Coordinates are irrelevant to the
 // simulation (it reads the graph, not geometry), so every node sits at (0, 0).
@@ -338,6 +339,69 @@ describe('L06 back-pressure — the stateful queue node', () => {
     expect(peak).toBeGreaterThan(L06.budgets.cost);
     const gold = NODE_SPECS.queue.cost + 2 * NODE_SPECS.service.cost;
     expect(gold).toBeCloseTo(L06.parCost, 9);
+  });
+});
+
+describe('L07 black friday — the finale stacks cache + queue + gate + chaos', () => {
+  const opts = { requireBeforeSinks: L07.requireBeforeSinks, chaos: L07.chaos };
+  // The canonical chain: ingress -> cache -> queue -> ci-gate -> N services.
+  const chain = (n: number): { nodes: GameNode[]; edges: Edge[] } => {
+    const nodes: GameNode[] = [ingress, cache('c'), queue('q'), gate('g')];
+    const edges: Edge[] = [edge('ingress', 'c'), edge('c', 'q'), edge('q', 'g')];
+    for (let i = 1; i <= n; i++) {
+      nodes.push(svc(`s${i}`));
+      edges.push(edge('g', `s${i}`));
+    }
+    return { nodes, edges };
+  };
+  const cost = (nodes: GameNode[]): number => nodes.reduce((a, x) => a + NODE_SPECS[x.kind].cost, 0);
+
+  it('the 4-replica gold build holds the error budget at par cost, with all axes live', () => {
+    const { nodes, edges } = chain(4);
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.ok).toBe(true);
+    expect(r.totalDropped).toBe(45);
+    expect(r.totalDropped).toBeLessThanOrEqual(L07.errorBudget);
+    expect(r.totalServed + r.totalDropped).toBe(r.totalArrived); // conservation holds
+    expect(cost(nodes)).toBeCloseTo(L07.parCost, 9); // $8.00 == par
+    expect(r.totalLatency).toBe(768); // cycles axis: buffered request-ticks in the queue
+    expect(r.coverage).toBe(1); // coverage axis: every replica sits behind the gate
+  });
+
+  it('3 replicas shed too big a share on a crash and fail the error budget', () => {
+    const { nodes, edges } = chain(3);
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.totalDropped).toBe(60);
+    expect(r.totalDropped).toBeGreaterThan(L07.errorBudget);
+  });
+
+  it('a 5th replica clears more drops but breaches the cost par (PASS, not gold)', () => {
+    const { nodes, edges } = chain(5);
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.totalDropped).toBeLessThanOrEqual(L07.errorBudget);
+    expect(cost(nodes)).toBeGreaterThan(L07.parCost);
+    expect(cost(nodes)).toBeLessThanOrEqual(L07.budgets.cost); // still inside the $9 budget
+  });
+
+  it('replays deterministically — the seeded incidents are a pure function of the seed', () => {
+    const { nodes, edges } = chain(4);
+    const a = simulate(nodes, edges, L07.traffic, opts).totalDropped;
+    const b = simulate(nodes, edges, L07.traffic, opts).totalDropped;
+    expect(a).toBe(b);
+  });
+
+  it('rejects an ungated replica — the deploy-gate rule still applies at the finale', () => {
+    const nodes = [ingress, cache('c'), queue('q'), svc('s1')];
+    const edges = [edge('ingress', 'c'), edge('c', 'q'), edge('q', 's1')];
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.ok).toBe(false);
+  });
+
+  it('the cache is load-bearing: strip it and the queue is swamped, blowing the budget', () => {
+    const nodes = [ingress, queue('q'), gate('g'), svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+    const edges = [edge('ingress', 'q'), edge('q', 'g'), edge('g', 's1'), edge('g', 's2'), edge('g', 's3'), edge('g', 's4')];
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.totalDropped).toBeGreaterThan(L07.errorBudget);
   });
 });
 

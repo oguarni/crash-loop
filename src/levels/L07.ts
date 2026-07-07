@@ -29,10 +29,11 @@ import type { LevelSpec } from '../types';
 //   5 svc -> 37 dropped, $9.00 -> PASS (over par). errorBudget 52 sits cleanly
 //   between the 4-replica (45) and 3-replica (60) builds.
 //
-// COORDINATION (Gabriel): please add an engine assertion covering this level —
-// the 4-replica gold build must PASS at total cost $8.00 with the seed below,
-// and the 3-replica build must FAIL. Numbers above are from a headless run of
-// src/sim/engine against this spec.
+// VERIFIED: engine assertions now cover this level in both src/sim/engine.test.ts
+// ("L07 black friday …") and scripts/sim-check.ts. Against the seed below, the
+// 4-replica gold build PASSES at $8.00 (45 dropped, 768 cycles, 100% coverage)
+// and the 3-replica build FAILS (60 dropped) — numbers reproduced headless from
+// src/sim/engine.
 const traffic = [
   ...Array<number>(12).fill(32), // steady read load
   ...Array<number>(8).fill(56), // the Black Friday burst

@@ -1,4 +1,4 @@
-// Verification harness for the L01 + L02 simulation math and topology rules.
+// Verification harness for the L01–L07 simulation math and topology rules.
 import { simulate } from '../src/sim/engine';
 import { NODE_SPECS } from '../src/sim/nodes';
 import { L01 } from '../src/levels/L01';
@@ -7,6 +7,7 @@ import { L03 } from '../src/levels/L03';
 import { L04 } from '../src/levels/L04';
 import { L05 } from '../src/levels/L05';
 import { L06 } from '../src/levels/L06';
+import { L07 } from '../src/levels/L07';
 import { Game } from '../src/game';
 import { mergeRecord } from '../src/progress';
 import type { Edge, GameNode } from '../src/types';
@@ -328,6 +329,71 @@ const chaosOpts = { chaos: L05.chaos };
   check('L06 peak provisioning (lb + 4 services) over budget', peakCost > L06.budgets.cost, `cost=${peakCost} budget=${L06.budgets.cost}`);
   const gold = NODE_SPECS.queue.cost + 2 * NODE_SPECS.service.cost;
   check('L06 par cost matches the gold build', Math.abs(gold - L06.parCost) < 1e-9, `cost=${gold} par=${L06.parCost}`);
+}
+
+// ===== L07 "black friday": the finale — cache + queue + gate + chaos stacked =====
+const l07Opts = { requireBeforeSinks: L07.requireBeforeSinks, chaos: L07.chaos };
+
+// Canonical chain: ingress -> cache -> queue -> ci-gate -> N services.
+function l07Chain(n: number): { nodes: GameNode[]; edges: Edge[] } {
+  const nodes: GameNode[] = [ingress, cache('c'), queue('q'), gate('g')];
+  const edges: Edge[] = [edge('ingress', 'c'), edge('c', 'q'), edge('q', 'g')];
+  for (let i = 1; i <= n; i++) {
+    nodes.push(svc('s' + i));
+    edges.push(edge('g', 's' + i));
+  }
+  return { nodes, edges };
+}
+const l07Cost = (nodes: GameNode[]): number => nodes.reduce((a, x) => a + NODE_SPECS[x.kind].cost, 0);
+
+// gold: 4 replicas hold the burst and a mid-run crash inside the 52 error budget,
+// at par $8.00, with all three axes live (768 buffered request-ticks, 100% coverage).
+{
+  const { nodes, edges } = l07Chain(4);
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  check('L07 gold (4 svc) holds the error budget', r.ok && r.totalDropped === 45 && r.totalDropped <= L07.errorBudget, `dropped=${r.totalDropped} budget=${L07.errorBudget}`);
+  check('L07 gold conservation holds', r.totalServed + r.totalDropped === r.totalArrived, `${r.totalServed}+${r.totalDropped}==${r.totalArrived}`);
+  check('L07 gold cost matches par $8.00', Math.abs(l07Cost(nodes) - L07.parCost) < 1e-9, `cost=${l07Cost(nodes)} par=${L07.parCost}`);
+  check('L07 all three axes live (cycles + coverage)', r.totalLatency === 768 && r.coverage === 1, `cycles=${r.totalLatency} coverage=${r.coverage}`);
+}
+
+// under-provisioning: 3 replicas shed too big a share on a crash — the budget is blown.
+{
+  const { nodes, edges } = l07Chain(3);
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  check('L07 3 svc fails the error budget', r.totalDropped === 60 && r.totalDropped > L07.errorBudget, `dropped=${r.totalDropped} budget=${L07.errorBudget}`);
+}
+
+// a 5th replica clears more drops but breaches the cost par — a PASS, not gold.
+{
+  const { nodes, edges } = l07Chain(5);
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  const cost = l07Cost(nodes);
+  check('L07 5 svc passes but over par', r.totalDropped <= L07.errorBudget && cost > L07.parCost && cost <= L07.budgets.cost, `dropped=${r.totalDropped} cost=${cost} par=${L07.parCost}`);
+}
+
+// determinism: the seeded incidents replay identically across runs.
+{
+  const { nodes, edges } = l07Chain(4);
+  const a = simulate(nodes, edges, L07.traffic, l07Opts).totalDropped;
+  const b = simulate(nodes, edges, L07.traffic, l07Opts).totalDropped;
+  check('L07 chaos is deterministic across runs', a === b, `runA=${a} runB=${b}`);
+}
+
+// the deploy-gate rule still bites: an ungated replica is rejected before the sim runs.
+{
+  const nodes = [ingress, cache('c'), queue('q'), svc('s1')];
+  const edges = [edge('ingress', 'c'), edge('c', 'q'), edge('q', 's1')];
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  check('L07 rejects an ungated replica', r.ok === false, `ok=${r.ok} error=${r.error ?? ''}`);
+}
+
+// the cache is load-bearing: strip it and the queue is swamped, blowing the budget.
+{
+  const nodes = [ingress, queue('q'), gate('g'), svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+  const edges = [edge('ingress', 'q'), edge('q', 'g'), edge('g', 's1'), edge('g', 's2'), edge('g', 's3'), edge('g', 's4')];
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  check('L07 without the cache the budget is blown', r.totalDropped > L07.errorBudget, `dropped=${r.totalDropped} budget=${L07.errorBudget}`);
 }
 
 
