@@ -32,11 +32,42 @@ if (!canvas) throw new Error('canvas #screen not found');
 const ctx = canvas.getContext('2d');
 if (!ctx) throw new Error('2d context unavailable');
 
-// Render at device-pixel resolution for crisp text; CSS keeps the on-screen size.
-const dpr = Math.min(window.devicePixelRatio || 1, 2);
-canvas.width = VIEW_W * dpr;
-canvas.height = VIEW_H * dpr;
-ctx.scale(dpr, dpr);
+// The canvas always draws in a fixed VIEW_W×VIEW_H logical space, but the CSS
+// scales its on-screen size to fit the viewport (any resolution / aspect ratio).
+// fitCanvas() sizes the backing store to that on-screen size × the device-pixel
+// ratio — so text stays crisp at any scale — and sets the transform that maps the
+// logical space onto it. The renderer and the input layer (toLogical) both keep
+// working in logical units, unaware of the real pixel size.
+function fitCanvas(): void {
+  const rect = canvas!.getBoundingClientRect();
+  const cssW = Math.max(1, rect.width);
+  const cssH = Math.max(1, rect.height);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // Cap the backing store so the per-frame CRT bloom blur stays cheap on very
+  // large / hi-dpi displays; past ~3× the logical width it adds no visible detail.
+  const scale = Math.min(dpr, (VIEW_W * 3) / cssW);
+  canvas!.width = Math.round(cssW * scale);
+  canvas!.height = Math.round(cssH * scale);
+  // Resizing the canvas above resets the 2D context, so (re)apply the logical→
+  // device transform every time. Non-uniform sx/sy absorbs any rounding so the
+  // 960×600 space maps exactly onto the backing store with no drift.
+  ctx!.setTransform(canvas!.width / VIEW_W, 0, 0, canvas!.height / VIEW_H, 0, 0);
+}
+
+// Refit whenever the canvas box changes — viewport resize, orientation flip, or
+// dragging the window to a monitor with a different dpr. A dirty flag coalesces
+// bursts to a single refit at the top of the next frame, and seeds the first
+// sizing before the first draw. Observing the canvas (not window) also catches
+// layout-only changes; the resize listener is a belt-and-braces fallback.
+let needsFit = true;
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => {
+    needsFit = true;
+  }).observe(canvas);
+}
+window.addEventListener('resize', () => {
+  needsFit = true;
+});
 
 let levelIndex = 0;
 const levelIds = LEVELS.map((l) => l.id);
@@ -347,6 +378,10 @@ let prevPlayhead = 0;
 let lastAlarm = 0;
 
 function frame(ts: number): void {
+  if (needsFit) {
+    fitCanvas();
+    needsFit = false;
+  }
   if (screen === 'boot') {
     drawTitle(ctx!, images, ts, menuCleared, levelIds.length);
     last = ts; // keep the first gameplay frame's dt sane
