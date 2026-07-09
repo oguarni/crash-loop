@@ -24,3 +24,4 @@ imgs/
 
 # Generated deliverables (built from the .md sources by scripts/build-*.py)
 *.pdf
+tmp/
