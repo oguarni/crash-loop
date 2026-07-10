@@ -104,6 +104,16 @@ describe('topology validation', () => {
     expect(r.totalDropped).toBe(30 * 30);
     expect(r.totalServed).toBe(0);
   });
+
+  it('rejects an ingress that fans out on its own', () => {
+    // The editor forbids this; so must the referee, or a headless run could
+    // "solve" a level by skipping the load-balancer the design prices in.
+    const nodes = [ingress, svc('s1'), svc('s2'), svc('s3')];
+    const edges = [edge('ingress', 's1'), edge('ingress', 's2'), edge('ingress', 's3')];
+    const r = simulate(nodes, edges, L01.traffic);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/single entry point/i);
+  });
 });
 
 describe('L02 first deploy — the deploy-gate rule', () => {
@@ -150,6 +160,33 @@ describe('L02 first deploy — the deploy-gate rule', () => {
   });
 });
 
+describe('requireBeforeSinks — every path must cross every required kind', () => {
+  const both = { requireBeforeSinks: ['gate', 'queue'] as NodeKind[] };
+
+  it('accepts a path that crosses all of them', () => {
+    const nodes = [ingress, queue('q'), gate('g'), svc('s1')];
+    const edges = [edge('ingress', 'q'), edge('q', 'g'), edge('g', 's1')];
+    expect(simulate(nodes, edges, flat(10, 1), both).ok).toBe(true);
+  });
+
+  it('rejects a path that crosses only one of them', () => {
+    // Satisfying the gate rule alone used to be enough: blocking both kinds in a
+    // single pass asks whether a path crosses gate OR queue, not gate AND queue.
+    const gateOnly = simulate([ingress, gate('g'), svc('s1')], [edge('ingress', 'g'), edge('g', 's1')], flat(10, 1), both);
+    expect(gateOnly.ok).toBe(false);
+    expect(gateOnly.error).toMatch(/queue/i);
+
+    const queueOnly = simulate([ingress, queue('q'), svc('s1')], [edge('ingress', 'q'), edge('q', 's1')], flat(10, 1), both);
+    expect(queueOnly.ok).toBe(false);
+    expect(queueOnly.error).toMatch(/gate/i);
+  });
+
+  it('is satisfied vacuously when no sink is reachable', () => {
+    const r = simulate([ingress, cache('c'), svc('orphan')], [edge('ingress', 'c')], flat(10, 1), both);
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe('L03 flapping cart — the cache node', () => {
   it('cache + 2 services serves everything and forwards only its misses', () => {
     const nodes = [ingress, cache('c'), svc('s1'), svc('s2')];
@@ -167,18 +204,43 @@ describe('L03 flapping cart — the cache node', () => {
     expect(r.totalDropped).toBeGreaterThan(L03.errorBudget);
   });
 
-  it('chained caches compound and drop nothing', () => {
+  it('does not let chained caches compound: the second one only forwards', () => {
+    // c2 receives c1's misses — by definition the reads that are not repeated —
+    // so it serves nothing and hands all 20 to a single replica that caps at 10.
     const nodes = [ingress, cache('c1'), cache('c2'), svc('s1')];
     const edges = [edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 's1')];
     const r = simulate(nodes, edges, L03.traffic);
-    expect(r.totalDropped).toBe(0);
+    expect(r.ticks[0].edgeLoad['c1->c2']).toBe(20); // c1 served 20 of 40, forwarded 20
+    expect(r.ticks[0].edgeLoad['c2->s1']).toBe(20); // c2 served none, forwarded all 20
+    expect(r.totalDropped).toBe(10 * 30);
+    expect(r.totalDropped).toBeGreaterThan(L03.errorBudget);
   });
 
-  it('drops the misses when a cache is itself a sink (no downstream)', () => {
-    // cache alone: serves 50% locally, but its misses have nowhere to go.
+  it('serves nothing from a cache with no origin behind it', () => {
+    // A cache alone has nothing to populate from: every request is a miss, and
+    // the misses have nowhere to go.
     const r = simulate([ingress, cache('c')], [edge('ingress', 'c')], flat(40, 1));
-    expect(r.totalServed).toBe(20); // 40 * 0.5 hit rate
-    expect(r.totalDropped).toBe(20); // the 20 misses are shed
+    expect(r.totalServed).toBe(0);
+    expect(r.totalDropped).toBe(40);
+    expect(r.ticks[0].nodeOverload['c']).toBe(true);
+  });
+
+  it('neuters a cache behind another cache even across intervening nodes', () => {
+    // cache -> gate -> cache: the rule follows paths, not adjacency, so the far
+    // cache still only ever sees the near cache's misses.
+    const nodes = [ingress, cache('c1'), gate('g'), cache('c2'), svc('s1')];
+    const edges = [edge('ingress', 'c1'), edge('c1', 'g'), edge('g', 'c2'), edge('c2', 's1')];
+    const r = simulate(nodes, edges, flat(20, 1));
+    expect(r.ticks[0].edgeLoad['c1->g']).toBe(10); // c1 serves 10 of 20
+    expect(r.ticks[0].edgeLoad['c2->s1']).toBe(10); // c2 serves none of the 10 it gets
+    expect(r.totalServed).toBe(20); // 10 cache hits + 10 handled by the replica
+  });
+
+  it('leaves a lone cache with a downstream serving its hits as usual', () => {
+    const r = simulate([ingress, cache('c'), svc('s1')], [edge('ingress', 'c'), edge('c', 's1')], flat(20, 1));
+    expect(r.ticks[0].edgeLoad['c->s1']).toBe(10); // 20 in, 10 hits, 10 misses forwarded
+    expect(r.totalServed).toBe(20);
+    expect(r.totalDropped).toBe(0);
   });
 
   it('drops the overflow beyond a cache capacity', () => {
@@ -395,6 +457,37 @@ describe('L07 black friday — the finale stacks cache + queue + gate + chaos', 
     const edges = [edge('ingress', 'c'), edge('c', 'q'), edge('q', 's1')];
     const r = simulate(nodes, edges, L07.traffic, opts);
     expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/gate/i);
+  });
+
+  // Regression: after the cache halves the load the burst is only 28 req/tick, so
+  // two $1.00 gates (40 req/tick across the pair) carried it with no buffering at
+  // all. That build cost $7.00 and beat par on every axis until the queue was
+  // required on every path to a replica.
+  it('rejects a build that routes around the queue with a second gate', () => {
+    const nodes = [ingress, cache('c'), gate('g1'), gate('g2'), svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+    const edges = [
+      edge('ingress', 'c'), edge('c', 'g1'), edge('c', 'g2'),
+      edge('g1', 's1'), edge('g1', 's2'),
+      edge('g2', 's3'), edge('g2', 's4'),
+    ];
+    expect(nodes.reduce((a, x) => a + NODE_SPECS[x.kind].cost, 0)).toBeLessThan(L07.parCost); // $7.00
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/buffer|queue/i);
+  });
+
+  it('rejects a queue that only covers some paths to a replica', () => {
+    // s2 hangs straight off the gate, bypassing the queue that shields s1.
+    const nodes = [ingress, cache('c'), gate('g'), queue('q'), svc('s1'), svc('s2')];
+    const edges = [
+      edge('ingress', 'c'), edge('c', 'g'),
+      edge('g', 'q'), edge('q', 's1'),
+      edge('g', 's2'),
+    ];
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/buffer|queue/i);
   });
 
   it('the cache is load-bearing: strip it and the queue is swamped, blowing the budget', () => {
@@ -402,6 +495,43 @@ describe('L07 black friday — the finale stacks cache + queue + gate + chaos', 
     const edges = [edge('ingress', 'q'), edge('q', 'g'), edge('g', 's1'), edge('g', 's2'), edge('g', 's3'), edge('g', 's4')];
     const r = simulate(nodes, edges, L07.traffic, opts);
     expect(r.totalDropped).toBeGreaterThan(L07.errorBudget);
+  });
+
+  // Regression: chained caches used to compound (0.5, 0.75, 0.875 …), so a ladder
+  // of them served nearly all traffic for $1.00 a rung. Both of these cleared the
+  // finale *under* par — the first with no service or gate at all — until a cache
+  // behind a cache was made unable to serve.
+  it('rejects a ladder of caches standing in for the whole topology', () => {
+    const nodes = [ingress, cache('c1'), cache('c2'), cache('c3'), cache('c4'), cache('c5')];
+    const edges = [edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 'c3'), edge('c3', 'c4'), edge('c4', 'c5')];
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.totalDropped).toBeGreaterThan(L07.errorBudget);
+    expect(r.coverage).toBe(0); // and it never had a replica behind the gate anyway
+  });
+
+  it('stops a second cache from buying its way down to two replicas', () => {
+    // A legal build in every other respect — queue and gate on the path — that
+    // chained a second cache to quarter the load, so two replicas sufficed and a
+    // crash cost little. $7.00, and gold, until a chained cache stopped serving.
+    const nodes = [ingress, cache('c1'), cache('c2'), queue('q'), gate('g'), svc('s1'), svc('s2')];
+    const edges = [
+      edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 'q'), edge('q', 'g'),
+      edge('g', 's1'), edge('g', 's2'),
+    ];
+    expect(nodes.reduce((a, x) => a + NODE_SPECS[x.kind].cost, 0)).toBeLessThan(L07.parCost); // $7.00
+    const r = simulate(nodes, edges, L07.traffic, opts);
+    expect(r.ok).toBe(true); // the topology is valid; it simply cannot hold the budget
+    expect(r.totalDropped).toBeGreaterThan(L07.errorBudget);
+  });
+
+  it('keeps the intended build the cheapest passing one: 4 replicas at par', () => {
+    const { nodes, edges } = chain(4);
+    expect(cost(nodes)).toBeCloseTo(L07.parCost, 9);
+    expect(simulate(nodes, edges, L07.traffic, opts).totalDropped).toBeLessThanOrEqual(L07.errorBudget);
+    // one replica fewer is cheaper, and fails
+    const three = chain(3);
+    expect(cost(three.nodes)).toBeLessThan(L07.parCost);
+    expect(simulate(three.nodes, three.edges, L07.traffic, opts).totalDropped).toBeGreaterThan(L07.errorBudget);
   });
 });
 

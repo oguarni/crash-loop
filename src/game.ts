@@ -1,7 +1,7 @@
 import type { Budgets, Edge, GameNode, LevelSpec, NodeKind, SimResult } from './types';
 import type { LevelRecord } from './progress';
 import { NODE_SPECS } from './sim/nodes';
-import { simulate } from './sim/engine';
+import { inertCacheIds, simulate } from './sim/engine';
 import { NODE_H, NODE_W, clampToWork, distToSegment, pointInNode } from './layout';
 
 export type Tool = 'move' | 'wire' | 'delete' | NodeKind;
@@ -198,6 +198,12 @@ export class Game {
       this.flash = 'Nothing routes into ingress.';
       return false;
     }
+    // A sink handles requests; it never forwards them. Without this the editor
+    // would happily draw an edge the simulation ignores outright.
+    if (!NODE_SPECS[from.kind].fanOut) {
+      this.flash = `A ${NODE_SPECS[from.kind].label} handles requests — nothing routes out of it.`;
+      return false;
+    }
     if (this.edges.some((e) => e.from === fromId && e.to === toId)) {
       this.flash = 'That edge already exists.';
       return false;
@@ -208,6 +214,13 @@ export class Game {
     }
     this.edges.push({ id: uid('e'), from: fromId, to: toId });
     this.flash = null;
+    // Warn — but do not reject — when the new edge parks a cache behind another:
+    // it can still forward, it just has no repeated reads left to serve.
+    const inert = inertCacheIds(this.nodes, this.edges);
+    const chained = this.nodes.some(
+      (n) => n.kind === 'cache' && inert.has(n.id) && this.edges.some((e) => e.from === n.id),
+    );
+    if (chained) this.flash = 'A cache behind another cache only sees misses — it serves nothing.';
     return true;
   }
 
@@ -240,6 +253,7 @@ export class Game {
 
   run(): void {
     if (this.mode !== 'edit') return;
+    this.flash = null; // an editing hint has no place over a run or its verdict
     const res = simulate(this.nodes, this.edges, this.level.traffic, {
       requireBeforeSinks: this.level.requireBeforeSinks,
       chaos: this.level.chaos,

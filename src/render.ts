@@ -2,6 +2,7 @@ import type { GameNode, LevelSpec, NodeKind, SimTick } from './types';
 import type { Game, Tool } from './game';
 import type { LevelRecord } from './progress';
 import { NODE_SPECS } from './sim/nodes';
+import { inertCacheIds } from './sim/engine';
 import { palette, tint } from './palette';
 import { type GameImages, ready } from './images';
 import { isMuted } from './audio';
@@ -352,7 +353,35 @@ function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number, flowTime
   drawWirePreview(ctx, game, mouse);
   drawNodes(ctx, game, tick, time, flowTime);
   if (game.mode === 'running' && game.paused) drawPausedOverlay(ctx);
+  if (game.flash) drawFlash(ctx, game.flash);
 
+  ctx.restore();
+}
+
+/**
+ * Rejected-action feedback, as a chip sitting above the hint. It lives here
+ * rather than on the HUD status line because that line is clipped to the gap
+ * before the buttons (~33 characters) — short enough to cut "ingress is a single
+ * entry point — route it through a load-balancer to fan out" down to its first
+ * clause, losing the very instruction the player needs.
+ */
+function drawFlash(ctx: Ctx, message: string): void {
+  const padX = 14;
+  ctx.font = font(12, 600);
+  const w = Math.min(ctx.measureText(message).width + padX * 2, VIEW_W - WORK_LEFT - 32);
+  const h = 26;
+  const x = WORK_LEFT + (VIEW_W - WORK_LEFT - w) / 2;
+  const y = WORK_BOTTOM - 68;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
+  rrect(ctx, { x, y, w, h }, 7);
+  ctx.fill();
+  ctx.strokeStyle = palette.amber;
+  ctx.lineWidth = 1.2;
+  rrect(ctx, { x, y, w, h }, 7);
+  ctx.stroke();
+  label(ctx, message, x + w / 2, y + 17, palette.amber, 12, 600, 'center');
   ctx.restore();
 }
 
@@ -443,7 +472,7 @@ function drawWirePreview(ctx: Ctx, game: Game, mouse: Point): void {
   ctx.setLineDash([]);
 }
 
-function nodeStat(game: Game, node: GameNode, tick: SimTick | null): string {
+function nodeStat(game: Game, node: GameNode, tick: SimTick | null, inertCaches: Set<string>): string {
   const spec = NODE_SPECS[node.kind];
   const finite = Number.isFinite(spec.capacity);
   // queue: surface how much it's holding (the buffer filling and draining)
@@ -454,6 +483,10 @@ function nodeStat(game: Game, node: GameNode, tick: SimTick | null): string {
     }
     return `hold ${spec.buffer} · <=${spec.capacity}/t`;
   }
+  // a cache that can't serve: say so, rather than showing a hit rate it won't hit
+  if (node.kind === 'cache' && inertCaches.has(node.id)) {
+    return game.edges.some((e) => e.from === node.id) ? 'no hits · fwd' : 'no origin';
+  }
   if (tick) {
     const inflow = tick.nodeInflow[node.id] ?? 0;
     return finite ? `${inflow}/${spec.capacity}` : `${inflow} req`;
@@ -463,6 +496,7 @@ function nodeStat(game: Game, node: GameNode, tick: SimTick | null): string {
 }
 
 function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flowTime: number): void {
+  const inertCaches = inertCacheIds(game.nodes, game.edges);
   for (const node of game.nodes) {
     const spec = NODE_SPECS[node.kind];
     const r: Rect = { x: node.x - NODE_W / 2, y: node.y - NODE_H / 2, w: NODE_W, h: NODE_H };
@@ -525,7 +559,7 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
     if (downed) {
       label(ctx, '! down', node.x, node.y + 14, tint.red, 12, 700, 'center');
     } else {
-      label(ctx, nodeStat(game, node, tick), node.x, node.y + 14, overloaded || queuing ? palette.amber : tint.greenDim, 12, 500, 'center');
+      label(ctx, nodeStat(game, node, tick, inertCaches), node.x, node.y + 14, overloaded || queuing ? palette.amber : tint.greenDim, 12, 500, 'center');
     }
 
     ctx.restore();
@@ -659,12 +693,10 @@ function drawHud(ctx: Ctx, game: Game): void {
   ctx.beginPath();
   ctx.rect(statusX, WORK_BOTTOM, Math.max(0, statusRight - statusX), HUD_H);
   ctx.clip();
+  // The flash message is drawn in the work area, where it has room to be read.
   let status = '';
   let statusColor: string = tint.boneDim;
-  if (game.flash) {
-    status = game.flash;
-    statusColor = palette.amber;
-  } else if (game.mode === 'edit') {
+  if (game.mode === 'edit') {
     status = game.overBudget() ? 'over budget — cannot run' : 'editing';
     statusColor = game.overBudget() ? tint.red : tint.boneDim;
   } else if (game.mode === 'running') {

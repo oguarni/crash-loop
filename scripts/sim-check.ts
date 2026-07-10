@@ -173,12 +173,20 @@ const gateRule = { requireBeforeSinks: L02.requireBeforeSinks };
   check('L03 cache + 1 service fails error budget', r.totalDropped > L03.errorBudget, `dropped=${r.totalDropped} budget=${L03.errorBudget}`);
 }
 
-// chained caches compound: ingress -> cache -> cache -> 1 service, zero drops.
+// chained caches do NOT compound: c2 only ever sees c1's misses, so it forwards
+// all 20 into a single replica that caps at 10.
 {
   const nodes = [ingress, cache('c1'), cache('c2'), svc('s1')];
   const edges = [edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 's1')];
   const r = simulate(nodes, edges, L03.traffic);
-  check('L03 chained caches drop nothing', r.totalDropped === 0, `dropped=${r.totalDropped}`);
+  check('L03 a chained cache serves nothing', r.ticks[0].edgeLoad['c2->s1'] === 20, `c2->s1=${r.ticks[0].edgeLoad['c2->s1']}`);
+  check('L03 chained caches fail the error budget', r.totalDropped === 10 * 30, `dropped=${r.totalDropped}`);
+}
+
+// a cache with no origin behind it cannot serve: every request is a miss.
+{
+  const r = simulate([ingress, cache('c')], [edge('ingress', 'c')], L03.traffic);
+  check('L03 a cache with no origin serves nothing', r.totalServed === 0, `served=${r.totalServed}`);
 }
 
 // conservation with a cache in the path.
@@ -396,6 +404,35 @@ const l07Cost = (nodes: GameNode[]): number => nodes.reduce((a, x) => a + NODE_S
   check('L07 without the cache the budget is blown', r.totalDropped > L07.errorBudget, `dropped=${r.totalDropped} budget=${L07.errorBudget}`);
 }
 
+// regression: a ladder of caches used to clear the finale under par with no
+// service and no gate at all, because hit rates compounded along the chain.
+{
+  const nodes = [ingress, cache('c1'), cache('c2'), cache('c3'), cache('c4'), cache('c5')];
+  const edges = [edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 'c3'), edge('c3', 'c4'), edge('c4', 'c5')];
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  check('L07 a cache ladder cannot stand in for the topology', r.totalDropped > L07.errorBudget, `dropped=${r.totalDropped} budget=${L07.errorBudget}`);
+}
+
+// regression: a second cache quartered the load, so two replicas sufficed. $7.00, gold.
+{
+  const nodes = [ingress, cache('c1'), cache('c2'), queue('q'), gate('g'), svc('s1'), svc('s2')];
+  const edges = [edge('ingress', 'c1'), edge('c1', 'c2'), edge('c2', 'q'), edge('q', 'g'), edge('g', 's1'), edge('g', 's2')];
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  const cost = l07Cost(nodes);
+  check('L07 a chained cache cannot buy its way to two replicas', r.ok && cost < L07.parCost && r.totalDropped > L07.errorBudget, `cost=${cost} dropped=${r.totalDropped}`);
+}
+
+// regression: two $1.00 gates carried the post-cache burst with no buffering, for
+// $7.00 — beating par on every axis — until the queue was required on every path.
+{
+  const nodes = [ingress, cache('c'), gate('g1'), gate('g2'), svc('s1'), svc('s2'), svc('s3'), svc('s4')];
+  const edges = [
+    edge('ingress', 'c'), edge('c', 'g1'), edge('c', 'g2'),
+    edge('g1', 's1'), edge('g1', 's2'), edge('g2', 's3'), edge('g2', 's4'),
+  ];
+  const r = simulate(nodes, edges, L07.traffic, l07Opts);
+  check('L07 rejects routing around the queue with a second gate', r.ok === false, `ok=${r.ok} cost=${l07Cost(nodes)} error=${r.error ?? ''}`);
+}
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);
 if (failures > 0) process.exit(1);

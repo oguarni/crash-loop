@@ -67,8 +67,10 @@ export interface LevelSpec {
   palette: NodeKind[]; // components the player may place
   initialNodes: GameNode[]; // pre-placed, fixed nodes (e.g. ingress)
   hint: string;
-  // Node kinds that every path from ingress to a sink (service) must traverse.
-  // e.g. ['gate'] forces all traffic through a deploy gate before production.
+  // Node kinds that every path from ingress to a sink (service) must traverse —
+  // each of them, not merely one. e.g. ['gate'] forces all traffic through a
+  // deploy gate before production; ['gate', 'queue'] additionally forces it to
+  // be buffered on the way.
   requireBeforeSinks?: NodeKind[];
   chaos?: ChaosSpec;
   parCycles?: number;   // target for the latency axis (lower is better)

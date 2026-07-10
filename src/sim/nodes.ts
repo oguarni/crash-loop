@@ -62,7 +62,7 @@ export const NODE_SPECS: Record<NodeKind, NodeSpec> = {
     placeable: true,
     fanOut: true, // forwards its misses downstream (kept out of the sink set)
     hitRate: 0.5, // serves ~half the reads locally, forwards the misses
-    description: 'Serves ~50% of repeated reads locally; forwards the misses downstream.',
+    description: 'Serves ~50% of repeated reads locally; forwards the misses downstream. A cache behind another cache only sees misses, so it serves nothing.',
   },
   queue: {
     kind: 'queue',

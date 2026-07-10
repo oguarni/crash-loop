@@ -13,8 +13,9 @@ const ARRIVAL_RATE = 40;
 //   cost:      $1.00 (cache) + 2 x $1.00 (svc) = $3.00  (== parCost, gold)
 //
 // The $4.50 budget rules out the cacheless build (lb + 4 services = $5.50), so
-// the player must reach for the cache. A chained cache -> cache -> 1 service is
-// an equally-cheap alternative that teaches caching compounds.
+// the player must reach for the cache. Chaining a second cache does not help: it
+// receives only the first one's misses — the reads that are *not* repeated — so
+// it serves nothing and forwards all 20 into a replica that caps at 10.
 export const L03: LevelSpec = {
   id: 'L03',
   name: 'flapping cart',

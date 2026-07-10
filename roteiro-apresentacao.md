@@ -31,7 +31,7 @@
 | 4:00–6:00 | **L06 "back-pressure"** | A queue: bufferizar um pico em vez de superdimensionar |
 | 6:00–8:30 | **L05 "chaos friday"** | Réplicas caem ao vivo; caos **determinístico** = testável |
 | 8:30–11:30 | **L07 "black friday"** | O finale: todas as mecânicas e os três eixos ao mesmo tempo |
-| 11:30–13:30 | **A engenharia por trás** | Determinismo → testes (92), CI/CD, arquitetura, processo |
+| 11:30–13:30 | **A engenharia por trás** | Determinismo → testes (105), CI/CD, arquitetura, processo |
 | 13:30–15:00 | **Roadmap + encerramento + Q&A** | Fechar e responder |
 
 **Se estourar o tempo:** corte o L06 (bloco 4:00–6:00). O arco mínimo que ainda conta a história é **L01 → L05 → L07**.
@@ -52,7 +52,7 @@ Tela: deixe o **boot screen** (título) aberto. Fale por cima; só aperte **ENTE
 > "O detalhe que faz esse jogo caber nesta disciplina: **cada mecânica é uma prática real de engenharia de software.** Load balancing, caching, *deploy gates* de CI/CD, filas e back-pressure, *error budgets*, chaos engineering. Não é reskin — o service é um service, o gate é um canary de verdade. Você aprende SRE **jogando**, e não lendo sobre."
 
 **Por que nesta disciplina (30s).**
-> "E tem uma simetria que a gente gosta: o jogo **ensina** engenharia de software, e foi **construído** com engenharia de software de verdade — simulação determinística, 92 testes automatizados, pipeline de CI/CD, arquitetura em camadas. O meio e a mensagem batem. É isso que a gente quer mostrar nos próximos doze minutos: primeiro o jogo, depois a engenharia por trás dele."
+> "E tem uma simetria que a gente gosta: o jogo **ensina** engenharia de software, e foi **construído** com engenharia de software de verdade — simulação determinística, 105 testes automatizados, pipeline de CI/CD, arquitetura em camadas. O meio e a mensagem batem. É isso que a gente quer mostrar nos próximos doze minutos: primeiro o jogo, depois a engenharia por trás dele."
 
 **Equipe + referências (20s).**
 > "Somos a equipe **Three-Way Merge** — Gabriel, Hector e Marcos. O nome é a operação de controle de versão que reconcilia três históricos num só. As referências são honestas: a linhagem Zachtronics — TIS-100, Opus Magnum —, e do lado técnico o livro de *Site Reliability Engineering* do Google, *Continuous Delivery* e *The Phoenix Project*."
@@ -154,6 +154,8 @@ Retome e deixe terminar.
 
 **Topologia-alvo:** `ingress → cache → queue → ci-gate → 4 services`.
 
+> **Duas regras estruturais valem aqui** (`requireBeforeSinks: ['gate', 'queue']`): todo caminho até uma réplica precisa cruzar **a queue** *e* **o ci-gate**. Sem a queue, o run é rejeitado com "*Unbuffered traffic reached production*" — é o que impede trocar a queue por um segundo gate e vencer o par a $7.00.
+
 **Passo a passo (alvo: GOLD, $8.00):**
 1. Rail: **`cache`**. Tabuleiro: à direita do ingress.
 2. Rail: **`queue`**. Tabuleiro: à direita do cache.
@@ -187,7 +189,7 @@ Se a máquina roda Node, **rode ao vivo** (impacto alto, ~1s):
 ```
 npm test        # 92 passing
 ```
-> "**92 testes**, cobertura de **~99%** no núcleo (sim + regras do tabuleiro + pontuação), mais um smoke harness headless com **47 asserções**. Cada fase tem a solução ouro e o *near-miss* provados: no finale, quatro réplicas passam a $8.00 e três réplicas **falham** — está no teste."
+> "**105 testes**, cobertura de **~99%** no núcleo (sim + regras do tabuleiro + pontuação), mais um smoke harness headless com **71 asserções**. Cada fase tem a solução ouro e o *near-miss* provados: no finale, quatro réplicas passam a $8.00 e três réplicas **falham** — está no teste."
 
 **2) CI/CD — a simetria de fechamento.**
 > "Tem CI no GitHub Actions: a cada push roda **typecheck → testes → build**. E um workflow de deploy publica no GitHub Pages a cada merge na main. Ou seja: **o jogo que ensina CI/CD é entregue por um pipeline de CI/CD.**"
@@ -220,7 +222,7 @@ Abra para **perguntas** (respostas prontas na seção 6).
 > A gente cita a linhagem abertamente. O diferencial é que **cada mecânica mapeia para uma prática de SRE real e nomeável** — não é puzzle abstrato, é um modelo de fluxo fiel (ainda que simplificado). Fidelidade educacional é o ponto.
 
 **"Como vocês projetaram a dificuldade?"**
-> Cada fase tem uma **estratégia dominante** imposta pelos orçamentos — um ouro único ou quase único. A lição fica inequívoca, e a gente **prova** cada uma com teste (ex.: no L01, lb + 3 services é o único build dentro de $5 que zera; no L07, quatro réplicas é o único ouro).
+> Cada fase tem uma **estratégia dominante** imposta pelos orçamentos e pelas regras estruturais da topologia — um ouro único ou quase único. A lição fica inequívoca, e a gente **prova** cada uma com teste (ex.: no L01, lb + 3 services é o único build dentro de $5 que zera; no L07, quatro réplicas é o único ouro). Também **enumeramos exaustivamente** o espaço de topologias dentro do orçamento de cada fase para confirmar que não existe um ouro mais barato que o par — foi assim que achamos e fechamos dois furos no finale: uma escada de caches que ganhava ouro a $5.00 sem nenhum service, e um build de $7.00 que trocava a queue por um segundo gate.
 
 **"Como se testa um jogo com falhas aleatórias?"**
 > O chaos é **semeado** — função pura da seed da fase, gerado uma vez antes do loop de ticks. Mesma seed → mesmo cronograma. Por isso dá para escrever um teste de determinismo (roda duas vezes, mesmo resultado). Está no `engine.test.ts`.
@@ -264,7 +266,7 @@ Abra para **perguntas** (respostas prontas na seção 6).
 - **Build ao vivo demorou:** pule para uma fase já pronta com as **teclas numéricas** e mostre um **Run** direto, ou use **`Skip >>`** para não esperar a animação.
 - **Perdi o tempo:** corte o **L06**; o arco mínimo é **L01 → L05 → L07**.
 - **Sem internet na hora:** o jogo roda **offline** depois de carregar uma vez. Se nem isso, rode o build local (`npm run preview`) ou mostre o `dist/`.
-- **A máquina do local não tem Node** (para o `npm test` ao vivo): tenha um **print** da saída dos 92 testes ou mostre o **check verde do CI** no GitHub. O jogo em si só precisa de um navegador.
+- **A máquina do local não tem Node** (para o `npm test` ao vivo): tenha um **print** da saída dos 105 testes ou mostre o **check verde do CI** no GitHub. O jogo em si só precisa de um navegador.
 
 ---
 

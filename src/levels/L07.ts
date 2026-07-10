@@ -8,7 +8,11 @@ import type { LevelSpec } from '../types';
 //            full arrival rate (without it the downstream is unaffordable);
 //   - QUEUE  soaks an 8-tick burst that would otherwise blow past the gate, then
 //            bleeds the backlog off across the quiet ticks (this is the cycles
-//            axis — request-ticks spent waiting);
+//            axis — request-ticks spent waiting). Required on every path: after
+//            the cache halves the load the burst is only 28 req/tick, so a
+//            player could otherwise buy a second $1.00 gate (40 req/tick of
+//            capacity across the pair) and skip buffering entirely — a $7.00
+//            build that beat par on every axis and dissolved the lesson;
 //   - GATE   every replica must sit behind the canary gate (requireBeforeSinks),
 //            which drives coverage to 100%;
 //   - CHAOS  two seeded incidents knock a replica out mid-run, so — as in L05 —
@@ -46,7 +50,7 @@ export const L07: LevelSpec = {
   brief:
     'Peak sale traffic, a mid-event replica crash, and a burst on top. Cache the reads, buffer the spike, gate every replica, and survive the incident.',
   objective:
-    'Serve the peak inside the error budget: cache the load, queue the burst, keep every replica behind the gate, and provision enough redundancy for the crash.',
+    'Serve the peak inside the error budget. Every request must be buffered by a queue and cleared by the gate before it reaches a replica — cache the load, and provision enough redundancy for the crash.',
   traffic,
   errorBudget: 52,
   budgets: { cpu: 10, mem: 12, cost: 9.0 },
@@ -54,7 +58,7 @@ export const L07: LevelSpec = {
   parCycles: 768,
   parCoverage: 1,
   palette: ['cache', 'queue', 'gate', 'service'],
-  requireBeforeSinks: ['gate'],
+  requireBeforeSinks: ['gate', 'queue'],
   initialNodes: [{ id: 'ingress', kind: 'ingress', x: 280, y: 270 }],
   chaos: { seed: 0x60de, duration: 5, windows: [[6, 11], [22, 27]] },
   hint: 'Chain ingress -> cache -> queue -> ci-gate -> four services. The cache halves the reads, the queue absorbs the burst, and four replicas keep a crash inside the error budget.',

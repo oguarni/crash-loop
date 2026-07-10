@@ -143,8 +143,10 @@ ingress ──> cache ──┬──> service
 
 The cache serves 20 locally and forwards 20 → 10/10 into two services: zero
 drops, at **$3.00** (gold). The cacheless brute force (lb + 4 services = $5.50)
-is over budget, so you can't out-spend the problem — you have to cache. A chained
-`cache → cache → 1 service` also clears gold at $3.00, since caching compounds.
+is over budget, so you can't out-spend the problem — you have to cache. Chaining a
+second cache does **not** help: it receives only the first one's misses — the
+reads that are not repeated — so it serves nothing and forwards all 20 into a
+replica that caps at 10.
 
 ## L04 — "error budget"
 
@@ -233,9 +235,13 @@ long recovery tail; two seeded incidents knock a replica out mid-run.
 - **cache** halves the heavy read load, so you provision for the misses, not the
   full arrival rate — without it the downstream is unaffordable;
 - **queue** soaks the burst and bleeds the backlog off across the quiet ticks
-  (this is the **cycles** axis — request-ticks spent waiting);
-- **ci-gate** is required before every replica (`requireBeforeSinks: ['gate']`),
-  which drives **coverage** to 100%;
+  (this is the **cycles** axis — request-ticks spent waiting). It is required on
+  every path to a replica: after the cache halves the load the burst is only
+  28 req/tick, so a second $1.00 gate would carry it unbuffered — a $7.00 build
+  that beat par on every axis and dissolved the lesson;
+- **ci-gate** is required before every replica, which drives **coverage** to 100%.
+  Both rules ride on `requireBeforeSinks: ['gate', 'queue']` — every path from
+  ingress to a replica must cross *each* listed kind;
 - **chaos** (as in L05) sheds a replica's share during each incident, so you
   spread the load across enough replicas to stay inside the error budget.
 - Budget caps you at **$9.00 / 10 CPU / 12 MEM**; the error budget is 52.

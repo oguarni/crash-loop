@@ -111,6 +111,30 @@ describe('wiring nodes', () => {
     expect(g.flash).toMatch(/already exists/i);
   });
 
+  it('refuses to route out of a sink, which the simulation would ignore anyway', () => {
+    const g = new Game(L01);
+    const lb = g.placeNode('load-balancer', 520, 250)!;
+    const s1 = g.placeNode('service', 760, 150)!;
+    const s2 = g.placeNode('service', 760, 350)!;
+    g.connect(lb.id, s1.id);
+    expect(g.connect(s1.id, s2.id)).toBe(false);
+    expect(g.flash).toMatch(/nothing routes out of it/i);
+    expect(g.edges.some((edge) => edge.from === s1.id)).toBe(false);
+  });
+
+  it('allows but flags a cache chained behind another cache', () => {
+    const g = new Game(L03);
+    const ing = g.nodes[0];
+    const c1 = g.placeNode('cache', 460, 250)!;
+    const c2 = g.placeNode('cache', 700, 250)!;
+    const s1 = g.placeNode('service', 700, 400)!;
+    expect(g.connect(ing.id, c1.id)).toBe(true);
+    expect(g.flash).toBeNull();
+    expect(g.connect(c1.id, c2.id)).toBe(true); // legal, but c2 can never serve
+    expect(g.connect(c2.id, s1.id)).toBe(true);
+    expect(g.flash).toMatch(/only sees misses/i);
+  });
+
   it('refuses to wire outside edit mode', () => {
     const g = new Game(L01);
     const lb = g.placeNode('load-balancer', 520, 250)!;

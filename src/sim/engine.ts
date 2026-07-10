@@ -10,7 +10,8 @@ import { makeRng, randInt } from './rng';
 // Node behaviour is data-driven:
 //   - fan-out nodes (ingress, load-balancer, gate) route up to capacity and
 //     split throughput evenly across their outgoing edges;
-//   - a cache serves a fixed fraction locally (hits) and forwards the misses;
+//   - a cache serves a fixed fraction locally (hits) and forwards the misses,
+//     but only if it can serve at all — see `cachesWithoutHits`;
 //   - a queue buffers traffic ACROSS ticks (the one stateful node): it drains up
 //     to `capacity` per tick and sheds the overflow when its buffer is full
 //     (back-pressure);
@@ -81,16 +82,68 @@ function fail(error: string): SimResult {
 }
 
 /**
- * BFS from ingress that refuses to traverse `blockKinds` nodes. If it can still
+ * Caches that cannot serve anything locally, so their hit rate is 0 and they can
+ * only forward (or, with no downstream, drop). Two cases, one idea — a cache hit
+ * needs both an origin to populate from and a request that no cache has already
+ * seen:
+ *
+ *   1. no outgoing edge — nothing behind it to populate the cache, so every
+ *      request is a miss with nowhere to go (matching every other fan-out node,
+ *      which likewise drops its throughput when it has no downstream consumer);
+ *   2. downstream of another cache — it only ever receives the upstream cache's
+ *      misses, which in this model *are* the requests that are not repeated
+ *      reads, so a second tier has nothing left to serve.
+ *
+ * Case 2 is what stops hit rates compounding along a chain (0.5, 0.75, 0.875 …).
+ * Without it a ladder of caches serves almost all traffic for $1.00 a rung, and
+ * a level like L07 can be cleared under par with no service behind the gate at
+ * all. It is deliberately checked over *all* paths, not just adjacency, so
+ * `cache -> gate -> cache` is caught too.
+ *
+ * Conservative on a diamond: a cache fed by both a cache and a fresh path is
+ * treated as inert, because some of its inflow is already-missed traffic.
+ *
+ * Pure function of the topology, and cycle-safe (the visited guard) so the
+ * editor can call it on a half-built board.
+ */
+function cachesWithoutHits(graph: Graph): Set<string> {
+  const behindCache = new Set<string>();
+  const stack: string[] = [];
+  for (const [id, n] of graph.nodes) {
+    if (n.kind === 'cache') for (const e of graph.outgoing.get(id)!) stack.push(e.to);
+  }
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (behindCache.has(id)) continue;
+    behindCache.add(id);
+    for (const e of graph.outgoing.get(id)!) stack.push(e.to);
+  }
+
+  const inert = new Set<string>();
+  for (const [id, n] of graph.nodes) {
+    if (n.kind !== 'cache') continue;
+    if (behindCache.has(id) || graph.outgoing.get(id)!.length === 0) inert.add(id);
+  }
+  return inert;
+}
+
+/** `cachesWithoutHits` for callers holding a raw board (the editor / renderer). */
+export function inertCacheIds(nodes: GameNode[], edges: Edge[]): Set<string> {
+  return cachesWithoutHits(buildGraph(nodes, edges));
+}
+
+/**
+ * BFS from ingress that refuses to traverse `blockKind` nodes. If it can still
  * reach a sink (a non-fan-out node, e.g. a service), some traffic reaches that
  * sink without passing a required intermediary — an invalid topology.
  *
  * NOTE: cache and queue are fanOut:true, so they are not treated as sinks here
- * even though a cache serves some traffic locally. That is fine for the current
- * levels; if a future level combines requireBeforeSinks with one of them, revisit
- * this so traffic terminating early is not silently allowed.
+ * even though a cache serves some traffic locally. A cache in front of a gate is
+ * a legitimate edge cache (the L07 gold build opens with one), and a cache that
+ * *would* terminate traffic early is already neutered by `cachesWithoutHits` —
+ * with no downstream it serves nothing — so nothing slips past this rule.
  */
-function sinkReachableWithout(graph: Graph, ingressId: string, blockKinds: Set<NodeKind>): boolean {
+function sinkReachableWithout(graph: Graph, ingressId: string, blockKind: NodeKind): boolean {
   const visited = new Set<string>();
   const queue: string[] = [ingressId];
   while (queue.length > 0) {
@@ -100,11 +153,17 @@ function sinkReachableWithout(graph: Graph, ingressId: string, blockKinds: Set<N
     if (!NODE_SPECS[graph.nodes.get(id)!.kind].fanOut) return true;
     for (const e of graph.outgoing.get(id)!) {
       const next = graph.nodes.get(e.to);
-      if (next && !blockKinds.has(next.kind) && !visited.has(e.to)) queue.push(e.to);
+      if (next && next.kind !== blockKind && !visited.has(e.to)) queue.push(e.to);
     }
   }
   return false;
 }
+
+/** Why a given required intermediary matters, in the level's own language. */
+const REQUIRED_KIND_ERROR: Partial<Record<NodeKind, string>> = {
+  gate: 'Untested traffic reached production — every service must sit behind a deploy gate.',
+  queue: 'Unbuffered traffic reached production — the burst must pass through a queue.',
+};
 
 /**
  * Build the incident schedule from the seed. Each window is a [minStart,maxStart]
@@ -191,14 +250,29 @@ export function simulate(
   if (!ingress) {
     return fail('No ingress in the topology.');
   }
+  // The editor enforces this too, but the simulation is the referee: every claim
+  // the level design makes about a build being priced out assumes ingress cannot
+  // fan out on its own, so a headless run must not be able to solve a level the
+  // player could never build.
+  if (graph.outgoing.get(ingress.id)!.length > 1) {
+    return fail('ingress is a single entry point — route it through a load-balancer to fan out.');
+  }
 
-  const required = opts.requireBeforeSinks;
-  if (required && required.length > 0 && sinkReachableWithout(graph, ingress.id, new Set(required))) {
-    return fail('Untested traffic reached production — every service must sit behind a deploy gate.');
+  // Each required kind is checked on its own: blocking them all at once would
+  // only assert that every path crosses *one of* them, where the rule is that
+  // every path crosses *each of* them.
+  for (const kind of opts.requireBeforeSinks ?? []) {
+    if (sinkReachableWithout(graph, ingress.id, kind)) {
+      return fail(REQUIRED_KIND_ERROR[kind] ?? `Every path to a service must pass through a ${NODE_SPECS[kind].label}.`);
+    }
   }
 
   // Precompute the seeded incident schedule once, before the tick loop.
   const downAt = opts.chaos ? buildIncidentSchedule(order, graph, traffic, opts.chaos) : null;
+
+  // Caches that serve no hits this run: a pure function of the topology, so it
+  // is computed once rather than re-derived every tick.
+  const noHits = cachesWithoutHits(graph);
 
   // Queue buffers persist across ticks — the only cross-tick state in the sim.
   const held = new Map<string, number>();
@@ -232,13 +306,16 @@ export function simulate(
       if (spec.hitRate != null) {
         // cache: serve a deterministic fraction of throughput locally (hits),
         // forward the misses downstream. Overflow beyond capacity is dropped.
+        // A cache that cannot serve (no origin, or fed another cache's misses)
+        // has an effective hit rate of 0 and forwards everything it takes in.
+        const hitRate = noHits.has(id) ? 0 : spec.hitRate;
         const throughput = Math.min(received, spec.capacity);
         const overCapacity = received - throughput;
         if (overCapacity > 0) {
           dropped += overCapacity;
           nodeOverload[id] = true;
         }
-        const hits = Math.floor(throughput * spec.hitRate);
+        const hits = Math.floor(throughput * hitRate);
         const misses = throughput - hits;
         served += hits;
         if (outs.length === 0) {
