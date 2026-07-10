@@ -387,10 +387,10 @@ function drawFlash(ctx: Ctx, message: string): void {
 
 /** A centred chip that makes a paused run unmistakable. */
 function drawPausedOverlay(ctx: Ctx): void {
-  const w = 176;
+  const w = 224;
   const h = 30;
   const x = (WORK_LEFT + VIEW_W) / 2 - w / 2;
-  const y = WORK_TOP + 42;
+  const y = WORK_TOP + 68;
   ctx.save();
   ctx.fillStyle = 'rgba(11, 16, 32, 0.85)';
   rrect(ctx, { x, y, w, h }, 8);
@@ -400,7 +400,7 @@ function drawPausedOverlay(ctx: Ctx): void {
   rrect(ctx, { x, y, w, h }, 8);
   ctx.stroke();
   label(ctx, '|| paused', x + 14, y + 20, palette.amber, 13, 700);
-  label(ctx, 'Space resumes', x + w - 12, y + 20, tint.boneDim, 10, 500, 'right');
+  label(ctx, 'Space resumes', x + w - 14, y + 20, tint.boneDim, 10, 500, 'right');
   ctx.restore();
 }
 
@@ -607,7 +607,7 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
     if (ax.cycles && rec.bestCycles != null) parts.push(`⟳${rec.bestCycles}`);
     if (ax.coverage && rec.bestCoverage != null) parts.push(`${Math.round(rec.bestCoverage * 100)}%`);
     label(ctx, '*', 14, 64, col, 12, 700);
-    label(ctx, parts.join(' · '), 26, 64, tint.boneDim, 11, 500);
+    label(ctx, truncate(ctx, parts.join(' '), RAIL_W - 36, 11, 500), 26, 64, tint.boneDim, 11, 500);
   }
 
   // back-to-menu affordance (also the Esc key)
@@ -623,29 +623,39 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   const items = layoutRail(game);
   const firstComp = items.find((i) => isNodeKind(i.tool));
   const firstTool = items.find((i) => i.tool === 'move');
-  if (firstComp) label(ctx, 'COMPONENTS', 14, firstComp.rect.y - 12, tint.boneDim, 11, 700);
-  if (firstTool) label(ctx, 'TOOLS', 14, firstTool.rect.y - 12, tint.boneDim, 11, 700);
+  if (firstComp) label(ctx, 'COMPONENTS', 14, firstComp.rect.y - 6, tint.boneDim, 11, 700);
+  if (firstTool) label(ctx, 'TOOLS', 14, firstTool.rect.y - 8, tint.boneDim, 11, 700);
 
   for (const item of items) {
     const selected = game.tool === item.tool;
     if (selected) {
-      ctx.fillStyle = tint.greenDim;
+      ctx.fillStyle = palette.green;
       rrect(ctx, item.rect, 6);
       ctx.fill();
     }
     ctx.strokeStyle = selected ? palette.green : tint.charcoalDim;
-    ctx.lineWidth = 1;
+    ctx.lineWidth = selected ? 1.4 : 1;
     rrect(ctx, item.rect, 6);
     ctx.stroke();
 
     const cy = item.rect.y + (item.cost !== undefined ? 19 : item.rect.h / 2 + 4);
-    label(ctx, item.glyph, item.rect.x + 12, cy, selected ? palette.green : palette.bone, 14, 700);
-    label(ctx, item.label, item.rect.x + 40, cy, selected ? palette.bone : tint.boneDim, 12, 600);
+    const selectedText = selected ? palette.navy : palette.bone;
+    const selectedSubtext = selected ? palette.navy : tint.greenDim;
+    const costText = item.cost !== undefined ? `$${item.cost.toFixed(2)}` : '';
+    let itemLabel = item.label;
+    if (costText) {
+      ctx.font = font(11, 700);
+      const costW = ctx.measureText(costText).width;
+      const labelMaxW = item.rect.w - 40 - costW - 20;
+      itemLabel = truncate(ctx, item.label, labelMaxW, 12, 600);
+    }
+    label(ctx, item.glyph, item.rect.x + 12, cy, selectedText, 14, 700);
+    label(ctx, itemLabel, item.rect.x + 40, cy, selected ? palette.navy : tint.boneDim, 12, 600);
 
     if (item.cost !== undefined) {
       const spec = NODE_SPECS[item.tool as NodeKind];
-      label(ctx, `$${item.cost.toFixed(2)}`, item.rect.x + item.rect.w - 10, item.rect.y + 19, palette.amber, 11, 700, 'right');
-      label(ctx, `cpu ${spec.cpu} · mem ${spec.mem}`, item.rect.x + 40, item.rect.y + 37, tint.greenDim, 11, 500);
+      label(ctx, costText, item.rect.x + item.rect.w - 10, item.rect.y + 19, selected ? palette.navy : palette.amber, 11, 700, 'right');
+      label(ctx, `cpu ${spec.cpu} · mem ${spec.mem}`, item.rect.x + 40, item.rect.y + 37, selectedSubtext, 11, 500);
     }
   }
 
@@ -734,7 +744,7 @@ function drawButtons(ctx: Ctx, buttons: Button[]): void {
     const base = btn.primary ? palette.green : tint.boneDim;
     const color = btn.enabled ? base : tint.charcoalDim;
     if (btn.primary && btn.enabled) {
-      ctx.fillStyle = tint.greenDim;
+      ctx.fillStyle = palette.green;
       rrect(ctx, btn.rect, 6);
       ctx.fill();
     }
@@ -742,7 +752,7 @@ function drawButtons(ctx: Ctx, buttons: Button[]): void {
     ctx.lineWidth = 1.3;
     rrect(ctx, btn.rect, 6);
     ctx.stroke();
-    label(ctx, btn.label, btn.rect.x + btn.rect.w / 2, btn.rect.y + btn.rect.h / 2 + 4, btn.enabled ? (btn.primary ? palette.bone : palette.bone) : tint.charcoalDim, 12, 600, 'center');
+    label(ctx, btn.label, btn.rect.x + btn.rect.w / 2, btn.rect.y + btn.rect.h / 2 + 4, btn.enabled ? (btn.primary ? palette.navy : palette.bone) : tint.charcoalDim, 12, 600, 'center');
   }
 }
 
@@ -781,7 +791,7 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   const res = game.result;
   if (!res) return;
   const w = 560;
-  const h = 152;
+  const h = 170;
   const x = WORK_LEFT + (VIEW_W - WORK_LEFT - w) / 2;
 
   // fade up and slide in over ~220ms
@@ -814,14 +824,14 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
     label(ctx, 'NEW BEST', chip.x + chip.w / 2, chip.y + 14, palette.navy, 11, 700, 'center');
   }
 
-  label(ctx, res.message, x + 24, y + 58, palette.bone, 13, 500);
+  const messageEnd = labelWrapped(ctx, res.message, x + 24, y + 58, w - 48, palette.bone, 13, 500, 16);
 
   // three scoring axes (cost / cycles / coverage), each with its saved best.
   // Only passing runs record a best, and the NEW BEST chip flags an improvement;
   // an axis that doesn't apply to this level renders "—" rather than a bare 0.
   const rec = game.savedRecord;
   const ax = levelAxes(game);
-  const ay = y + 76;
+  const ay = Math.max(y + 82, messageEnd + 24);
   const c0 = x + 24;
   const c1 = x + 214;
   const c2 = x + 404;
@@ -840,7 +850,7 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   const covPar = ax.coverage && game.level.parCoverage != null ? `par ${Math.round(game.level.parCoverage * 100)}%` : undefined;
   drawAxis(ctx, c2, ay, 'COVERAGE', covVal, covBest, game.newBest && ax.coverage, covPar);
 
-  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 138, tint.greenDim, 12, 500);
+  label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + h - 16, tint.greenDim, 12, 500);
   ctx.restore();
 }
 
@@ -870,7 +880,7 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
   ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-  const panel: Rect = { x: 156, y: 34, w: 648, h: 536 };
+  const panel: Rect = { x: 128, y: 28, w: 704, h: 544 };
   ctx.fillStyle = tint.panel;
   rrect(ctx, panel, 12);
   ctx.fill();
@@ -953,15 +963,15 @@ export function drawTutorial(ctx: Ctx): void {
   }
 
   // Start / Skip button (purely an affordance — any click closes the tutorial).
-  const btn: Rect = { x: VIEW_W / 2 - 92, y: 506, w: 184, h: 38 };
-  ctx.fillStyle = tint.greenDim;
+  const btn: Rect = { x: VIEW_W / 2 - 92, y: 486, w: 184, h: 38 };
+  ctx.fillStyle = palette.green;
   rrect(ctx, btn, 8);
   ctx.fill();
   ctx.strokeStyle = palette.green;
   ctx.lineWidth = 1.4;
   rrect(ctx, btn, 8);
   ctx.stroke();
-  label(ctx, 'Start >', btn.x + btn.w / 2, btn.y + btn.h / 2 + 5, palette.bone, 15, 700, 'center');
+  label(ctx, 'Start >', btn.x + btn.w / 2, btn.y + btn.h / 2 + 5, palette.navy, 15, 700, 'center');
 
   label(ctx, 'Skip (Esc) · reopen any time with T · press ? in a level for the full controls', VIEW_W / 2, panel.y + panel.h - 14, tint.greenDim, 12, 500, 'center');
   ctx.restore();
