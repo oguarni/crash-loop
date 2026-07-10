@@ -399,6 +399,16 @@ function frame(ts: number): void {
   const dt = last ? (ts - last) / 1000 : 0;
   last = ts;
 
+  // A run starts from clean cosmetic clocks: packets always set off from ingress,
+  // and the heartbeat never fires on tick 0 because the previous run's playhead
+  // was left behind. Must happen before the playback and audio blocks below,
+  // which both read these on the run's very first frame.
+  if (game.mode === 'running' && prevMode !== 'running') {
+    flowTime = 0;
+    accumulator = 0;
+    prevPlayhead = 0;
+  }
+
   if (game.mode === 'running' && !game.paused) {
     accumulator += dt * TICKS_PER_SEC;
     flowTime += dt * 1000;

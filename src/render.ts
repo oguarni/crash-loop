@@ -475,13 +475,15 @@ function drawWirePreview(ctx: Ctx, game: Game, mouse: Point): void {
 function nodeStat(game: Game, node: GameNode, tick: SimTick | null, inertCaches: Set<string>): string {
   const spec = NODE_SPECS[node.kind];
   const finite = Number.isFinite(spec.capacity);
-  // queue: surface how much it's holding (the buffer filling and draining)
+  // queue: surface how much it's holding (the buffer filling and draining).
+  // Kept under 17 characters: the node box is 122px and the 12px mono face runs
+  // 7.2px per character, so a longer line bleeds over the border.
   if (node.kind === 'queue') {
     if (tick) {
       const held = tick.buffered?.[node.id] ?? 0;
       return `${held} held · <=${spec.capacity}/t`;
     }
-    return `hold ${spec.buffer} · <=${spec.capacity}/t`;
+    return `buf ${spec.buffer} · <=${spec.capacity}/t`;
   }
   // a cache that can't serve: say so, rather than showing a hit rate it won't hit
   if (node.kind === 'cache' && inertCaches.has(node.id)) {
@@ -491,7 +493,14 @@ function nodeStat(game: Game, node: GameNode, tick: SimTick | null, inertCaches:
     const inflow = tick.nodeInflow[node.id] ?? 0;
     return finite ? `${inflow}/${spec.capacity}` : `${inflow} req`;
   }
-  if (node.kind === 'ingress') return `${game.level.traffic[0]} req/tick`;
+  // At rest, ingress advertises the whole profile. Showing only traffic[0] hid the
+  // spike a level is built around — L07 read "32 req/tick" and never mentioned the
+  // burst to 56 that the queue exists to absorb.
+  if (node.kind === 'ingress') {
+    const lo = Math.min(...game.level.traffic);
+    const hi = Math.max(...game.level.traffic);
+    return lo === hi ? `${lo} req/tick` : `${lo}–${hi} req/tick`;
+  }
   return `cap ${spec.capacity}`;
 }
 
@@ -753,9 +762,17 @@ function levelAxes(game: Game): { cycles: boolean; coverage: boolean } {
   return { cycles: kinds.has('queue'), coverage };
 }
 
-/** One axis column on the result banner: name, this run's value, saved best. */
-function drawAxis(ctx: Ctx, x: number, y: number, name: string, value: string, best: string, hot: boolean): void {
+/**
+ * One axis column on the result banner: name (with the level's par, where it sets
+ * one), this run's value, and the saved best. Par is a target to read the value
+ * against — only the cost axis decides the GOLD tier.
+ */
+function drawAxis(ctx: Ctx, x: number, y: number, name: string, value: string, best: string, hot: boolean, par?: string): void {
   label(ctx, name, x, y, tint.boneDim, 11, 700);
+  if (par) {
+    ctx.font = font(11, 700);
+    label(ctx, par, x + ctx.measureText(name).width + 10, y, tint.greenDim, 11, 500);
+  }
   label(ctx, value, x, y + 18, hot ? palette.green : palette.bone, 16, 700);
   label(ctx, best, x, y + 34, tint.greenDim, 11, 500);
 }
@@ -810,15 +827,18 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
   const c2 = x + 404;
 
   drawAxis(ctx, c0, ay, 'COST $', res.cost.toFixed(2),
-    rec?.bestCost != null ? `best ${rec.bestCost.toFixed(2)}` : 'best —', game.newBest);
+    rec?.bestCost != null ? `best ${rec.bestCost.toFixed(2)}` : 'best —', game.newBest,
+    `par ${res.parCost.toFixed(2)}`);
 
   const cyclesVal = ax.cycles ? String(res.cycles) : '—';
   const cyclesBest = !ax.cycles ? '—' : rec?.bestCycles != null ? `best ${rec.bestCycles}` : 'best —';
-  drawAxis(ctx, c1, ay, '⟳ CYCLES', cyclesVal, cyclesBest, game.newBest && ax.cycles);
+  const cyclesPar = ax.cycles && game.level.parCycles != null ? `par ${game.level.parCycles}` : undefined;
+  drawAxis(ctx, c1, ay, '⟳ CYCLES', cyclesVal, cyclesBest, game.newBest && ax.cycles, cyclesPar);
 
   const covVal = ax.coverage ? `${Math.round(res.coverage * 100)}%` : '—';
   const covBest = !ax.coverage ? '—' : rec?.bestCoverage != null ? `best ${Math.round(rec.bestCoverage * 100)}%` : 'best —';
-  drawAxis(ctx, c2, ay, 'COVERAGE', covVal, covBest, game.newBest && ax.coverage);
+  const covPar = ax.coverage && game.level.parCoverage != null ? `par ${Math.round(game.level.parCoverage * 100)}%` : undefined;
+  drawAxis(ctx, c2, ay, 'COVERAGE', covVal, covBest, game.newBest && ax.coverage, covPar);
 
   label(ctx, 'Edit to tweak the topology, or Clear to start over.', x + 24, y + 138, tint.greenDim, 12, 500);
   ctx.restore();

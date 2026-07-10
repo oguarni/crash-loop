@@ -354,6 +354,22 @@ describe('L05 chaos friday — seeded incident injection', () => {
     expect(r.ticks.every((t) => t.downed === undefined)).toBe(true);
   });
 
+  // Regression: victims were drawn from every service on the board, so an unwired
+  // replica could absorb an incident. Three wired replicas fail L05; adding two
+  // disconnected decoys used to make them pass, by feeding chaos a node that
+  // carried no traffic. It also shifted the shuffle, changing who a seed hit.
+  it('never victimises a replica ingress cannot reach', () => {
+    const wired = [ingress, lb, svc('s1'), svc('s2'), svc('s3')];
+    const edges = [edge('ingress', 'lb'), edge('lb', 's1'), edge('lb', 's2'), edge('lb', 's3')];
+    const bare = simulate(wired, edges, L05.traffic, chaosOpts);
+    const decoyed = simulate([...wired, svc('d1'), svc('d2')], edges, L05.traffic, chaosOpts);
+
+    expect(bare.totalDropped).toBeGreaterThan(L05.errorBudget);
+    expect(decoyed.totalDropped).toBe(bare.totalDropped); // decoys change nothing
+    const victims = new Set(decoyed.ticks.flatMap((t) => t.downed ?? []));
+    expect([...victims].every((id) => id !== 'd1' && id !== 'd2')).toBe(true);
+  });
+
   it('par cost matches the gold build', () => {
     const cost = NODE_SPECS['load-balancer'].cost + 4 * NODE_SPECS.service.cost;
     expect(cost).toBeCloseTo(L05.parCost, 9);
@@ -590,6 +606,23 @@ describe('coverage axis — services behind a CI gate', () => {
 
   it('is 0 when the topology has no service sinks at all', () => {
     const r = simulate([ingress, gate('g')], [edge('ingress', 'g')], flat(10, 1));
+    expect(r.coverage).toBe(0);
+  });
+
+  it('ignores a service ingress cannot reach', () => {
+    // The stray replica takes no traffic, so it is not part of the system: it can
+    // neither dilute nor inflate the fraction. Gated s1 alone means 100%.
+    const nodes = [ingress, gate('g'), svc('s1'), svc('stray')];
+    const edges = [edge('ingress', 'g'), edge('g', 's1')];
+    const r = simulate(nodes, edges, flat(10, 1));
+    expect(r.coverage).toBe(1);
+  });
+
+  it('still counts an unreachable service as absent, not as gated', () => {
+    // Only the ungated, reachable s1 is scored — a stray must not lift it to 50%.
+    const nodes = [ingress, svc('s1'), svc('stray')];
+    const edges = [edge('ingress', 's1')];
+    const r = simulate(nodes, edges, flat(10, 1));
     expect(r.coverage).toBe(0);
   });
 });

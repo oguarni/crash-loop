@@ -2,7 +2,7 @@ import type { Budgets, Edge, GameNode, LevelSpec, NodeKind, SimResult } from './
 import type { LevelRecord } from './progress';
 import { NODE_SPECS } from './sim/nodes';
 import { inertCacheIds, simulate } from './sim/engine';
-import { NODE_H, NODE_W, clampToWork, distToSegment, pointInNode } from './layout';
+import { NODE_H, NODE_W, type Point, distToSegment, pointInNode, workBounds } from './layout';
 
 export type Tool = 'move' | 'wire' | 'delete' | NodeKind;
 export type Mode = 'edit' | 'running' | 'result';
@@ -86,6 +86,7 @@ export class Game {
     this.playhead = 0;
     this.paused = false;
     this.result = null;
+    this.resultAt = 0;
     this.newBest = false;
   }
 
@@ -94,6 +95,7 @@ export class Game {
     this.mode = 'edit';
     this.sim = null;
     this.result = null;
+    this.resultAt = 0;
     this.playhead = 0;
     this.paused = false;
     this.newBest = false;
@@ -151,24 +153,41 @@ export class Game {
 
   /**
    * After a drag, if the node landed on top of another, push it to the nearest
-   * free, in-bounds slot (a short outward spiral search). Returns true if moved.
+   * free, in-bounds slot. Returns true if it moved.
+   *
+   * The search sweeps the whole work area rather than spiralling outward from the
+   * drop point: a spiral samples 16 angles per ring and can thread between free
+   * slots, leaving the node overlapping with no feedback. The board holds a
+   * handful of nodes, so an exhaustive sweep is cheap and always finds a slot if
+   * one exists.
    */
   resolveOverlap(id: string): boolean {
     const node = this.nodes.find((n) => n.id === id);
     if (!node || !this.wouldOverlap(node.x, node.y, id)) return false;
-    const step = 14;
-    for (let ring = 1; ring <= 28; ring++) {
-      for (let a = 0; a < 16; a++) {
-        const ang = (a / 16) * Math.PI * 2;
-        const p = clampToWork(node.x + Math.cos(ang) * ring * step, node.y + Math.sin(ang) * ring * step);
-        if (!this.wouldOverlap(p.x, p.y, id)) {
-          node.x = p.x;
-          node.y = p.y;
-          return true;
+    const spot = this.nearestFreeSlot(node, id);
+    if (!spot) return false; // the board is genuinely full; leave the node put
+    node.x = spot.x;
+    node.y = spot.y;
+    return true;
+  }
+
+  /** The free, in-bounds slot closest to `from`, or null if the board is full. */
+  private nearestFreeSlot(from: Point, ignoreId: string): Point | null {
+    const { minX, maxX, minY, maxY } = workBounds();
+    const step = 8;
+    let best: Point | null = null;
+    let bestDist = Infinity;
+    for (let x = minX; x <= maxX; x += step) {
+      for (let y = minY; y <= maxY; y += step) {
+        if (this.wouldOverlap(x, y, ignoreId)) continue;
+        const d = (x - from.x) ** 2 + (y - from.y) ** 2;
+        if (d < bestDist) {
+          bestDist = d;
+          best = { x, y };
         }
       }
     }
-    return false;
+    return best;
   }
 
   deleteNode(id: string): void {
@@ -253,7 +272,13 @@ export class Game {
 
   run(): void {
     if (this.mode !== 'edit') return;
-    this.flash = null; // an editing hint has no place over a run or its verdict
+    // Drop every editing affordance: none of them mean anything during a run, and
+    // a selection that outlives one leaves Esc clearing an invisible highlight
+    // instead of returning to the menu.
+    this.flash = null;
+    this.selectedNodeId = null;
+    this.wireFromId = null;
+    this.draggingId = null;
     const res = simulate(this.nodes, this.edges, this.level.traffic, {
       requireBeforeSinks: this.level.requireBeforeSinks,
       chaos: this.level.chaos,

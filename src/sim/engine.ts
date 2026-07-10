@@ -171,13 +171,22 @@ const REQUIRED_KIND_ERROR: Partial<Record<NodeKind, string>> = {
  * tick, and a deterministic shuffle assigns each incident a distinct victim
  * service (knocked out for `duration` ticks). Pure function of the seed and the
  * service set. Returns a tick -> Set(downed service ids) map.
+ *
+ * Only services ingress can reach are eligible victims. An unwired replica takes
+ * no traffic, so letting chaos knock it out would hand the player a free
+ * incident: buy a $1.00 node, wire nothing to it, and watch it absorb an
+ * outage. It would also perturb the shuffle, so an inert node could change which
+ * replica a seed victimises.
  */
-function buildIncidentSchedule(order: string[], graph: Graph, traffic: number[], chaos: ChaosSpec): Map<number, Set<string>> {
+function buildIncidentSchedule(
+  order: string[],
+  graph: Graph,
+  traffic: number[],
+  chaos: ChaosSpec,
+  reachable: Set<string>,
+): Map<number, Set<string>> {
   const downAt = new Map<number, Set<string>>();
-  const sinks = order.filter((id) => {
-    const spec = NODE_SPECS[graph.nodes.get(id)!.kind];
-    return !spec.fanOut && spec.hitRate == null && spec.buffer == null; // true sinks: service nodes
-  });
+  const sinks = order.filter((id) => reachable.has(id) && isService(graph.nodes.get(id)!));
   if (sinks.length === 0) return downAt;
 
   const rng = makeRng(chaos.seed);
@@ -201,17 +210,45 @@ function buildIncidentSchedule(order: string[], graph: Graph, traffic: number[],
   return downAt;
 }
 
+/** Is this node a true sink — a service, not a cache or a queue? */
+function isService(node: GameNode): boolean {
+  const spec = NODE_SPECS[node.kind];
+  return !spec.fanOut && spec.hitRate == null && spec.buffer == null;
+}
+
+/**
+ * Every node ingress can route to. Nodes outside this set carry no traffic, so
+ * they take no part in scoring: they are neither victims for chaos nor terms in
+ * the coverage fraction.
+ */
+function reachableFrom(graph: Graph, startId: string): Set<string> {
+  const seen = new Set<string>();
+  const frontier: string[] = [startId];
+  while (frontier.length > 0) {
+    const id = frontier.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const e of graph.outgoing.get(id)!) frontier.push(e.to);
+  }
+  return seen;
+}
+
 /**
  * Structural test coverage: the fraction of service nodes that sit behind a CI
  * gate (every ingress -> service path passes a gate). A service reachable from
  * ingress without crossing a gate is "untested". Pure function of the topology.
+ *
+ * Only services that ingress can actually reach are scored. A replica left
+ * unwired on the board takes no traffic, so counting it as "tested" would let a
+ * stray node inflate the coverage axis; counting it as untested would punish a
+ * build for a node that carries nothing. It simply is not part of the system.
  */
-function computeCoverage(graph: Graph, ingressId: string): number {
-  const services = [...graph.nodes.values()].filter((n) => {
-    const spec = NODE_SPECS[n.kind];
-    return !spec.fanOut && spec.hitRate == null && spec.buffer == null;
-  });
+function computeCoverage(graph: Graph, ingressId: string, reachable: Set<string>): number {
+  const services = [...reachable].filter((id) => isService(graph.nodes.get(id)!));
   if (services.length === 0) return 0;
+
+  // A second walk that refuses to step through a gate: whatever service it still
+  // reaches took traffic that never cleared one.
   const visited = new Set<string>();
   const ungated = new Set<string>();
   const queue: string[] = [ingressId];
@@ -219,9 +256,8 @@ function computeCoverage(graph: Graph, ingressId: string): number {
     const id = queue.shift()!;
     if (visited.has(id)) continue;
     visited.add(id);
-    const spec = NODE_SPECS[graph.nodes.get(id)!.kind];
-    if (!spec.fanOut && spec.hitRate == null && spec.buffer == null) {
-      ungated.add(id); // a service reached without crossing a gate
+    if (isService(graph.nodes.get(id)!)) {
+      ungated.add(id);
       continue;
     }
     for (const e of graph.outgoing.get(id)!) {
@@ -267,8 +303,11 @@ export function simulate(
     }
   }
 
+  // Which nodes ingress can actually route to. Scoring ignores the rest.
+  const reachable = reachableFrom(graph, ingress.id);
+
   // Precompute the seeded incident schedule once, before the tick loop.
-  const downAt = opts.chaos ? buildIncidentSchedule(order, graph, traffic, opts.chaos) : null;
+  const downAt = opts.chaos ? buildIncidentSchedule(order, graph, traffic, opts.chaos, reachable) : null;
 
   // Caches that serve no hits this run: a pure function of the topology, so it
   // is computed once rather than re-derived every tick.
@@ -427,6 +466,6 @@ export function simulate(
     totalDropped += leftover;
   }
 
-  const coverage = computeCoverage(graph, ingress.id);
+  const coverage = computeCoverage(graph, ingress.id, reachable);
   return { ok: true, ticks, totalArrived, totalServed, totalDropped, totalLatency, coverage };
 }

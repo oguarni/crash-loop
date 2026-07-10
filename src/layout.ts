@@ -38,12 +38,19 @@ export function pointInNode(px: number, py: number, n: Point): boolean {
   return pointInRect(px, py, nodeRect(n));
 }
 
+/** The range a node centre may occupy with its whole box inside the work area. */
+export function workBounds(): { minX: number; maxX: number; minY: number; maxY: number } {
+  return {
+    minX: WORK_LEFT + NODE_W / 2 + 10,
+    maxX: WORK_RIGHT - NODE_W / 2 - 10,
+    minY: WORK_TOP + NODE_H / 2 + 10,
+    maxY: WORK_BOTTOM - NODE_H / 2 - 10,
+  };
+}
+
 /** Clamp a node centre so its whole box stays inside the work area. */
 export function clampToWork(x: number, y: number): Point {
-  const minX = WORK_LEFT + NODE_W / 2 + 10;
-  const maxX = WORK_RIGHT - NODE_W / 2 - 10;
-  const minY = WORK_TOP + NODE_H / 2 + 10;
-  const maxY = WORK_BOTTOM - NODE_H / 2 - 10;
+  const { minX, maxX, minY, maxY } = workBounds();
   return {
     x: Math.max(minX, Math.min(maxX, x)),
     y: Math.max(minY, Math.min(maxY, y)),

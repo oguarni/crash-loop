@@ -86,6 +86,26 @@ describe('resolveOverlap', () => {
     const g = new Game(L01);
     expect(g.resolveOverlap('nope')).toBe(false);
   });
+
+  it('finds a slot on a crowded board rather than giving up', () => {
+    // The old outward spiral sampled 16 angles per ring and could thread between
+    // free slots, leaving the node overlapping and reporting false.
+    const g = new Game(L01);
+    const placed = [];
+    for (let x = 280; x <= 860; x += 140) {
+      for (let y = 40; y <= 500; y += 60) {
+        const n = g.placeNode('service', x, y);
+        if (n) placed.push(n);
+      }
+    }
+    expect(placed.length).toBeGreaterThan(6); // a genuinely busy board
+    const victim = placed[0];
+    const other = placed[placed.length - 1];
+    victim.x = other.x + 4; // shove it onto another node
+    victim.y = other.y;
+    expect(g.resolveOverlap(victim.id)).toBe(true);
+    expect(g.wouldOverlap(victim.x, victim.y, victim.id)).toBe(false);
+  });
 });
 
 describe('wiring nodes', () => {
@@ -250,6 +270,21 @@ describe('running a build', () => {
     expect(g.mode).toBe('running');
     expect(g.sim?.ok).toBe(true);
     expect(g.playhead).toBe(0);
+  });
+
+  it('drops editing state, so a selection cannot outlive the run', () => {
+    // A selection surviving a run left Esc clearing an invisible highlight
+    // instead of returning to the menu.
+    const g = goldL01();
+    g.selectedNodeId = 'lb';
+    g.wireFromId = 'lb';
+    g.draggingId = 'lb';
+    g.flash = 'stale';
+    g.run();
+    expect(g.selectedNodeId).toBeNull();
+    expect(g.wireFromId).toBeNull();
+    expect(g.draggingId).toBeNull();
+    expect(g.flash).toBeNull();
   });
 });
 
