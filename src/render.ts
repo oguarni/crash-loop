@@ -990,6 +990,23 @@ function drawCover(ctx: Ctx, img: HTMLImageElement, r: Rect): void {
   ctx.drawImage(img, r.x + (r.w - dw) / 2, r.y + (r.h - dh) / 2, dw, dh);
 }
 
+const LOGO_CROP = {
+  x: 250 / 2100,
+  y: 250 / 900,
+  w: 1600 / 2100,
+  h: 380 / 900,
+} as const;
+
+function drawLogo(ctx: Ctx, img: HTMLImageElement, x: number, y: number, w: number): number {
+  const sx = img.naturalWidth * LOGO_CROP.x;
+  const sy = img.naturalHeight * LOGO_CROP.y;
+  const sw = img.naturalWidth * LOGO_CROP.w;
+  const sh = img.naturalHeight * LOGO_CROP.h;
+  const h = (w * sh) / sw;
+  ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+  return h;
+}
+
 export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0, total = 0): void {
   if (titleT0 === 0) titleT0 = time;
   const elapsed = time - titleT0;
@@ -1046,9 +1063,8 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
 
   // wordmark
   if (ready(imgs.logo)) {
-    const lw = 440;
-    const lh = (lw * imgs.logo.naturalHeight) / imgs.logo.naturalWidth;
-    ctx.drawImage(imgs.logo, lx, 150, lw, lh);
+    const lw = 540;
+    drawLogo(ctx, imgs.logo, 360, 74, lw);
   }
   ctx.restore();
 
@@ -1131,7 +1147,7 @@ const MENU_CARD_W = 384;
 const MENU_CARD_MAX_H = 84;
 const MENU_GAP_X = 24;
 const MENU_GAP_Y = 16;
-const MENU_TOP = 178;
+const MENU_TOP = 188;
 const MENU_BOTTOM = 546; // keep the grid clear of the footer (progress + credit)
 
 /** Grid of clickable level cards (2 columns). Hit-regions for the input layer,
@@ -1205,11 +1221,10 @@ export function drawMenu(
 
   // header — wordmark if the art has decoded, otherwise the plain title
   if (ready(imgs.logo)) {
-    const lw = 300;
-    const lh = (lw * imgs.logo.naturalHeight) / imgs.logo.naturalWidth;
-    ctx.drawImage(imgs.logo, (VIEW_W - lw) / 2, 60, lw, lh);
+    const lw = 560;
+    drawLogo(ctx, imgs.logo, (VIEW_W - lw) / 2, 18, lw);
   } else {
-    label(ctx, 'crash-loop', VIEW_W / 2, 96, palette.green, 30, 700, 'center');
+    label(ctx, 'crash-loop', VIEW_W / 2, 82, palette.green, 34, 700, 'center');
   }
   label(ctx, 'select a region — click a card or press 1–' + levels.length + '   ·   press T for tutorial', VIEW_W / 2, 162, tint.boneDim, 14, 500, 'center');
 
@@ -1222,41 +1237,38 @@ export function drawMenu(
     const hover = pointInRect(mouse.x, mouse.y, c.rect);
     const r = c.rect;
 
-    // accent: gold > cleared > locked; hover brightens the border
+    // Hover uses a bright card with dark text so the selected region stays readable.
     const accent = gold ? palette.amber : isCleared ? palette.green : tint.greenDim;
-    ctx.fillStyle = tint.node;
+    ctx.fillStyle = hover ? (gold ? palette.amber : palette.green) : tint.node;
     rrect(ctx, r, 9);
     ctx.fill();
-    if (hover) {
-      ctx.fillStyle = tint.greenDim;
-      rrect(ctx, r, 9);
-      ctx.fill();
-    }
-    ctx.strokeStyle = hover ? palette.bone : accent;
+    ctx.strokeStyle = hover ? palette.navy : accent;
     ctx.lineWidth = hover ? 1.8 : 1.2;
     rrect(ctx, r, 9);
     ctx.stroke();
 
     // hotkey chip
     const chip: Rect = { x: r.x + 12, y: r.y + 14, w: 30, h: 30 };
-    ctx.strokeStyle = accent;
+    ctx.strokeStyle = hover ? palette.navy : accent;
     ctx.lineWidth = 1.2;
     rrect(ctx, chip, 6);
     ctx.stroke();
-    label(ctx, String(c.index + 1), chip.x + chip.w / 2, chip.y + 21, palette.bone, 15, 700, 'center');
+    const mainText = hover ? palette.navy : palette.bone;
+    const detailText = hover ? palette.navy : tint.boneDim;
+    label(ctx, String(c.index + 1), chip.x + chip.w / 2, chip.y + 21, mainText, 15, 700, 'center');
 
     const tx = r.x + 56;
     const tw = r.w - 56 - 16;
-    label(ctx, `${lvl.id} · ${lvl.name}`, tx, r.y + 27, palette.bone, 15, 700);
-    label(ctx, truncate(ctx, lvl.brief, tw, 11, 400), tx, r.y + 46, tint.boneDim, 11, 400);
+    label(ctx, `${lvl.id} · ${lvl.name}`, tx, r.y + 27, mainText, 15, 700);
+    label(ctx, truncate(ctx, lvl.brief, tw, 11, 400), tx, r.y + 46, detailText, 11, hover ? 600 : 400);
 
     // status line: saved tier + best cost, or a subtle locked marker
     if (isCleared) {
       const mark = gold ? '[*] GOLD' : '[+] PASS';
       const best = rec?.bestCost != null ? ` · $${rec.bestCost.toFixed(2)}` : '';
-      label(ctx, `${mark}${best}`, tx, r.y + 67, accent, 12, 700);
+      label(ctx, `${mark}${best}`, tx, r.y + 67, hover ? palette.navy : accent, 12, 700);
     } else {
-      label(ctx, '[ ] not cleared', tx, r.y + 67, tint.boneDim, 12, 500);
+      label(ctx, '[ ] not cleared', tx, r.y + 67, detailText, 12, hover ? 700 : 500);
     }
   }
 
