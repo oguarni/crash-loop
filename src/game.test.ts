@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Edge, GameNode, NodeKind } from './types';
 import { Game } from './game';
+import { workBounds } from './layout';
 import { L01 } from './levels/L01';
 import { L03 } from './levels/L03';
 import { L04 } from './levels/L04';
@@ -105,6 +106,111 @@ describe('resolveOverlap', () => {
     victim.y = other.y;
     expect(g.resolveOverlap(victim.id)).toBe(true);
     expect(g.wouldOverlap(victim.x, victim.y, victim.id)).toBe(false);
+  });
+});
+
+describe('carrying a node (the move gesture)', () => {
+  it('picks a node up at the pointer, keeping the grab offset', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    expect(g.beginCarry(s.id, 520, 260)).toBe(true);
+    expect(g.carryId).toBe(s.id);
+    expect(g.selectedNodeId).toBe(s.id);
+    expect(g.carryOrigin).toEqual({ x: 500, y: 250 });
+    expect(g.carryOffX).toBe(20);
+    expect(g.carryOffY).toBe(10);
+
+    // the offset is preserved, so the node does not snap its centre to the pointer
+    expect(g.moveCarried(620, 360)).toBe(true);
+    expect(g.nodes.find((n) => n.id === s.id)).toMatchObject({ x: 600, y: 350 });
+  });
+
+  it('refuses to pick up an unknown node, or anything outside edit mode', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    expect(g.beginCarry('ghost', 0, 0)).toBe(false);
+    g.mode = 'running';
+    expect(g.beginCarry(s.id, 500, 250)).toBe(false);
+    expect(g.carryId).toBeNull();
+  });
+
+  it('clamps the carried node so its whole box stays on the board', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    g.beginCarry(s.id, 500, 250);
+    g.moveCarried(-5000, -5000);
+    const { minX, minY } = workBounds();
+    expect(g.nodes.find((n) => n.id === s.id)).toMatchObject({ x: minX, y: minY });
+    // already parked against the corner: a further push reports no movement
+    expect(g.moveCarried(-6000, -6000)).toBe(false);
+  });
+
+  it('drops the node where it stands, nudging it off anything it landed on', () => {
+    const g = new Game(L01);
+    const a = g.placeNode('service', 500, 150)!;
+    const b = g.placeNode('service', 700, 400)!;
+    g.beginCarry(b.id, 700, 400);
+    g.moveCarried(a.x + 4, a.y); // put b almost exactly onto a
+    expect(g.dropCarried()).toBe(true);
+    expect(g.carryId).toBeNull();
+    expect(g.carryOrigin).toBeNull();
+    expect(g.wouldOverlap(b.x, b.y, b.id)).toBe(false);
+  });
+
+  it('cancels back to the pick-up spot, leaving nothing in hand', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    g.beginCarry(s.id, 500, 250);
+    g.moveCarried(800, 400);
+    expect(g.cancelCarry()).toBe(true);
+    expect(g.nodes.find((n) => n.id === s.id)).toMatchObject({ x: 500, y: 250 });
+    expect(g.carryId).toBeNull();
+  });
+
+  it('reports false for every carry step when nothing is in hand', () => {
+    const g = new Game(L01);
+    expect(g.moveCarried(500, 250)).toBe(false);
+    expect(g.dropCarried()).toBe(false);
+    expect(g.cancelCarry()).toBe(false);
+  });
+
+  it('lets go of a node deleted mid-carry instead of tracking a ghost', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    g.beginCarry(s.id, 500, 250);
+    g.deleteNode(s.id);
+    expect(g.carryId).toBeNull();
+    expect(g.moveCarried(600, 300)).toBe(false);
+  });
+
+  it('self-heals if the carried node vanishes without deleteNode', () => {
+    // Defends the renderer and the input layer from a stale carryId: both look up
+    // the node every frame, so the state has to clear itself, not throw.
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    g.beginCarry(s.id, 500, 250);
+    g.nodes = g.nodes.filter((n) => n.id !== s.id);
+    expect(g.cancelCarry()).toBe(true);
+    expect(g.carryId).toBeNull();
+  });
+
+  it('switching tools abandons the move rather than committing it', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    g.beginCarry(s.id, 500, 250);
+    g.moveCarried(820, 420);
+    g.setTool('wire');
+    expect(g.carryId).toBeNull();
+    expect(g.nodes.find((n) => n.id === s.id)).toMatchObject({ x: 500, y: 250 });
+  });
+
+  it('reset() leaves nothing in hand', () => {
+    const g = new Game(L01);
+    const s = g.placeNode('service', 500, 250)!;
+    g.beginCarry(s.id, 500, 250);
+    g.reset();
+    expect(g.carryId).toBeNull();
+    expect(g.carryOrigin).toBeNull();
   });
 });
 
@@ -278,13 +384,24 @@ describe('running a build', () => {
     const g = goldL01();
     g.selectedNodeId = 'lb';
     g.wireFromId = 'lb';
-    g.draggingId = 'lb';
     g.flash = 'stale';
+    g.beginCarry('lb', 0, 0);
     g.run();
     expect(g.selectedNodeId).toBeNull();
     expect(g.wireFromId).toBeNull();
-    expect(g.draggingId).toBeNull();
+    expect(g.carryId).toBeNull();
     expect(g.flash).toBeNull();
+  });
+
+  it('commits a node still in hand, keeping the position the player chose', () => {
+    // Enter can start a run mid-carry: the node belongs where the player left it,
+    // not back at the slot it was picked up from.
+    const g = goldL01();
+    g.beginCarry('lb', 0, 0);
+    g.moveCarried(600, 300);
+    g.run();
+    expect(g.carryId).toBeNull();
+    expect(g.nodes.find((node) => node.id === 'lb')).toMatchObject({ x: 600, y: 300 });
   });
 });
 

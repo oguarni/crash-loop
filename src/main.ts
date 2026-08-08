@@ -8,10 +8,12 @@ import {
   drawTutorial,
   isNodeKind,
   layoutButtons,
+  layoutHelpButton,
   layoutLevelSelect,
   layoutMenuButton,
   layoutMuteButton,
   layoutRail,
+  layoutTutorialButton,
 } from './render';
 import { images } from './images';
 import * as audio from './audio';
@@ -23,9 +25,12 @@ import {
   VIEW_W,
   WORK_BOTTOM,
   clampToWork,
+  inflate,
   pointInRect,
   type Point,
+  type Rect,
 } from './layout';
+import { installBoardGestureGuards, installRotateNudge } from './mobile';
 
 const canvas = document.getElementById('screen') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('canvas #screen not found');
@@ -132,13 +137,48 @@ function startLevel(i: number): void {
 }
 
 canvas.style.cursor = 'pointer';
+installBoardGestureGuards(canvas);
+installRotateNudge();
 
-function toLogical(e: MouseEvent): Point {
+function toLogical(e: PointerEvent): Point {
   const rect = canvas!.getBoundingClientRect();
   return {
     x: (e.clientX - rect.left) * (VIEW_W / rect.width),
     y: (e.clientY - rect.top) * (VIEW_H / rect.height),
   };
+}
+
+// --- pointer gesture state -----------------------------------------------------
+
+// One gesture at a time: the board follows a single pointer id, so a stray second
+// finger can never fight the first over the node in hand.
+let activePointerId: number | null = null;
+let pressOrigin: Point | null = null;
+let pressTravelled = false; // did the active press move past DRAG_SLOP while held?
+let coarse = false; // the last pointer was a finger / pen — pad the small hit-boxes
+
+// How far a press may wander and still count as a click rather than a drag. Six
+// logical px is ~2 device px on a phone-sized board: tight enough that a tap
+// stays a tap, loose enough to absorb the wobble of a fingertip.
+const DRAG_SLOP = 6;
+
+// Touch slack for hit-testing only, in logical px. The board is a fixed 960×600
+// surface scaled to fit, so the small chrome shrinks to a couple of millimetres
+// on a phone. Every pad stays under half the gap to that widget's nearest
+// neighbour on that axis, so an inflated box can never swallow the row next to
+// it — render.smoke.test.ts proves it for the tightest level.
+const TOUCH_SLACK = {
+  rail: { x: 3, y: 3 }, // rail rows sit 6px apart
+  header: { x: 3, y: 9 }, // menu | help share one row 8px apart, but stand alone vertically
+  mute: { x: 3, y: 4 }, // 8px under the last rail row, 10px over the HUD divider
+  button: { x: 5, y: 5 }, // HUD buttons sit 10px apart; menu cards 16px and 24px
+} as const;
+const EDGE_SLACK = 7; // extra tolerance when tapping a wire (a radius, not a rect)
+
+const NO_SLACK = { x: 0, y: 0 } as const;
+function hit(p: Point, r: Rect, kind: keyof typeof TOUCH_SLACK): boolean {
+  const s = coarse ? TOUCH_SLACK[kind] : NO_SLACK;
+  return pointInRect(p.x, p.y, inflate(r, s.x, s.y));
 }
 
 function handleButton(id: ButtonId): void {
@@ -167,28 +207,41 @@ function onDown(p: Point): void {
     return;
   }
   if (screen === 'menu') {
-    const card = layoutLevelSelect(LEVELS.length).find((c) => pointInRect(p.x, p.y, c.rect));
+    const card = layoutLevelSelect(LEVELS.length).find((c) => hit(p, c.rect, 'button'));
     if (card) startLevel(card.index);
     return;
   }
-  // any click dismisses the help overlay without touching the board
+  // The help overlay swallows the click: only its own "how to play" affordance
+  // acts, everything else just closes it without touching the board.
   if (helpOpen) {
     helpOpen = false;
+    if (hit(p, layoutTutorialButton(), 'button')) tutorialOpen = true;
     return;
   }
   game.flash = null;
 
+  const inWork = p.x > RAIL_W && p.y < WORK_BOTTOM;
+  // A press on the chrome abandons a half-finished move: a node can only be put
+  // down on the board, so reaching for the rail means "never mind", not "drop it
+  // in the rail". The node springs back to where it was picked up.
+  if (!inWork) game.cancelCarry();
+
   // component / tool rail
   if (p.x <= RAIL_W) {
-    if (pointInRect(p.x, p.y, layoutMenuButton())) {
+    if (hit(p, layoutMenuButton(), 'header')) {
       openMenu();
       return;
     }
-    if (pointInRect(p.x, p.y, layoutMuteButton())) {
+    if (hit(p, layoutHelpButton(), 'header')) {
+      helpOpen = true;
+      audio.sfx.tool();
+      return;
+    }
+    if (hit(p, layoutMuteButton(), 'mute')) {
       audio.toggleMuted();
       return;
     }
-    const item = layoutRail(game).find((i) => pointInRect(p.x, p.y, i.rect));
+    const item = layoutRail(game).find((i) => hit(p, i.rect, 'rail'));
     if (item) {
       const changed = game.tool !== item.tool;
       game.setTool(item.tool);
@@ -199,7 +252,7 @@ function onDown(p: Point): void {
 
   // hud buttons
   if (p.y >= WORK_BOTTOM) {
-    const btn = layoutButtons(game).find((b) => pointInRect(p.x, p.y, b.rect));
+    const btn = layoutButtons(game).find((b) => hit(p, b.rect, 'button'));
     if (btn && btn.enabled) handleButton(btn.id);
     return;
   }
@@ -217,11 +270,21 @@ function onDown(p: Point): void {
   }
 
   if (game.tool === 'move') {
+    // Step two of the move: a node already in hand is put down right here. This
+    // is the whole gesture on a touch screen — tap the node, tap the destination
+    // — and it doubles as click-to-place for a mouse.
+    if (game.carryId) {
+      game.moveCarried(p.x, p.y);
+      game.dropCarried();
+      audio.sfx.place();
+      return;
+    }
+    // Step one: pick the node up. Whether this ends as a drag (the press travels)
+    // or as the first click of a two-click move (the press stays put) is decided
+    // on release, in onUp.
     if (node) {
-      game.draggingId = node.id;
-      game.dragOffX = p.x - node.x;
-      game.dragOffY = p.y - node.y;
-      game.selectedNodeId = node.id;
+      game.beginCarry(node.id, p.x, p.y);
+      audio.sfx.pick();
     } else {
       game.selectedNodeId = null;
     }
@@ -251,7 +314,7 @@ function onDown(p: Point): void {
       game.deleteNode(node.id);
       if (game.nodes.length < before) audio.sfx.remove();
     } else {
-      const edge = game.edgeAt(p.x, p.y);
+      const edge = game.edgeAt(p.x, p.y, coarse ? 7 + EDGE_SLACK : 7);
       if (edge) {
         game.deleteEdge(edge.id);
         audio.sfx.remove();
@@ -268,24 +331,45 @@ function onMove(p: Point): void {
     return;
   }
 
-  if (game.draggingId && game.mode === 'edit') {
-    const n = game.nodes.find((node) => node.id === game.draggingId);
-    if (n) {
-      const pos = clampToWork(p.x - game.dragOffX, p.y - game.dragOffY);
-      n.x = pos.x;
-      n.y = pos.y;
-    }
+  if (pressOrigin && !pressTravelled && Math.hypot(p.x - pressOrigin.x, p.y - pressOrigin.y) > DRAG_SLOP) {
+    pressTravelled = true;
   }
+  // A carried node tracks the pointer, so a mouse drag and the follow-the-cursor
+  // half of a two-click move are the same code — and it is a no-op when nothing is
+  // in hand. Touch reports no movement between taps, which is exactly why the node
+  // stays put until the second one.
+  game.moveCarried(p.x, p.y);
 
   const inWork = p.x > RAIL_W && p.y < WORK_BOTTOM;
   game.hoverNodeId = inWork ? (game.nodeAt(p.x, p.y)?.id ?? null) : null;
   updateCursor(p);
 }
 
-function onUp(): void {
-  // a node dropped on top of another is nudged to the nearest free slot
-  if (game.draggingId) game.resolveOverlap(game.draggingId);
-  game.draggingId = null;
+function onUp(e: PointerEvent): void {
+  if (activePointerId !== null && e.pointerId !== activePointerId) return;
+  activePointerId = null;
+  // A press that travelled is a drag: releasing puts the node down. A press that
+  // stayed put is the first click of the two-step move, so the node stays in hand
+  // until the next click — the only form the gesture can take on a touch screen.
+  if (pressTravelled && game.carryId) {
+    game.dropCarried();
+    audio.sfx.place();
+  }
+  // A finger leaves no cursor behind, so its hover highlight would stick forever.
+  if (coarse) game.hoverNodeId = null;
+  pressTravelled = false;
+  pressOrigin = null;
+}
+
+/** The OS stole the gesture (call, notification shade, scroll takeover). */
+function onCancel(e: PointerEvent): void {
+  if (activePointerId !== null && e.pointerId !== activePointerId) return;
+  activePointerId = null;
+  // Only an in-flight drag is rolled back; a node parked in hand by a tap stays
+  // there, because its second tap is still to come.
+  if (pressTravelled) game.cancelCarry();
+  pressTravelled = false;
+  pressOrigin = null;
 }
 
 function updateCursor(p: Point): void {
@@ -302,14 +386,43 @@ function updateCursor(p: Point): void {
   } else if (game.tool === 'delete') {
     cursor = game.nodeAt(p.x, p.y) || game.edgeAt(p.x, p.y) ? 'pointer' : 'default';
   } else if (game.tool === 'move') {
-    cursor = game.draggingId ? 'grabbing' : game.nodeAt(p.x, p.y) ? 'grab' : 'default';
+    cursor = game.carryId ? 'grabbing' : game.nodeAt(p.x, p.y) ? 'grab' : 'default';
   }
   canvas!.style.cursor = cursor;
 }
 
-canvas.addEventListener('mousedown', (e) => onDown(toLogical(e)));
-canvas.addEventListener('mousemove', (e) => onMove(toLogical(e)));
-window.addEventListener('mouseup', onUp);
+// Pointer events, not mouse events: they are the only input model a finger and a
+// mouse share. Touch never produces a mousemove while pressed — the browser
+// synthesises the whole mouse sequence *after* the finger lifts, at one point —
+// so a mousedown/mousemove/mouseup board is unusable on a phone.
+canvas.addEventListener('pointerdown', (e) => {
+  if (!e.isPrimary) return; // a second finger never starts a second gesture
+  if (e.pointerType === 'mouse' && e.button !== 0) return; // left button only
+  e.preventDefault(); // no text selection, no synthetic mouse events, no scroll
+  // Re-arm audio from every press, not only the boot one: browsers differ on
+  // which event counts as the user gesture that lifts their autoplay block, and
+  // unlock() is idempotent (the ambient pad starts at most once).
+  audio.unlock();
+  coarse = e.pointerType !== 'mouse';
+  activePointerId = e.pointerId;
+  pressOrigin = toLogical(e);
+  pressTravelled = false;
+  // Capture keeps a drag alive when the pointer leaves the canvas, so a node
+  // dragged toward the edge does not freeze halfway.
+  try {
+    canvas!.setPointerCapture(e.pointerId);
+  } catch {
+    /* unsupported — the window-level up/cancel listeners still end the gesture */
+  }
+  onDown(pressOrigin);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (activePointerId !== null && e.pointerId !== activePointerId) return;
+  coarse = e.pointerType !== 'mouse';
+  onMove(toLogical(e));
+});
+window.addEventListener('pointerup', onUp);
+window.addEventListener('pointercancel', onCancel);
 window.addEventListener('keydown', (e) => {
   if (screen === 'boot') {
     if (e.key === 'Enter' || e.key === ' ' || e.key === 't' || e.key === 'T') {
@@ -349,8 +462,11 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'm' || e.key === 'M') {
     audio.toggleMuted();
   } else if (e.key === 'Escape') {
-    // clear a pending wire/selection first; a "clean" Esc returns to the menu.
-    if (game.wireFromId || game.selectedNodeId) {
+    // Unwind one layer at a time: a node in hand goes back where it came from,
+    // then a pending wire/selection clears, and only a "clean" Esc leaves the level.
+    if (game.cancelCarry()) {
+      /* the carried node sprang back — that was this Esc's job */
+    } else if (game.wireFromId || game.selectedNodeId) {
       game.wireFromId = null;
       game.selectedNodeId = null;
     } else {

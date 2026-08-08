@@ -38,6 +38,21 @@ export function pointInNode(px: number, py: number, n: Point): boolean {
   return pointInRect(px, py, nodeRect(n));
 }
 
+/**
+ * Grow a rect for hit-testing only — the drawn box is unchanged. Touch input
+ * needs the slack: the board is a fixed 960×600 surface scaled to fit, so a 20px
+ * rail row lands near 3mm on a phone. The axes pad independently because the
+ * space around a widget rarely is: two buttons sharing a row have room above and
+ * below but none between them. Each pad must stay under half the gap to the
+ * nearest neighbour on that axis, or an inflated box swallows it.
+ *
+ * @example pointInRect(p.x, p.y, inflate(layoutMuteButton(), 3, 4))
+ */
+export function inflate(r: Rect, padX: number, padY = padX): Rect {
+  if (padX <= 0 && padY <= 0) return r;
+  return { x: r.x - padX, y: r.y - padY, w: r.w + padX * 2, h: r.h + padY * 2 };
+}
+
 /** The range a node centre may occupy with its whole box inside the work area. */
 export function workBounds(): { minX: number; maxX: number; minY: number; maxY: number } {
   return {

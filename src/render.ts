@@ -123,9 +123,28 @@ export function layoutMuteButton(): Rect {
   return { x: 12, y: WORK_BOTTOM - 30, w: RAIL_W - 24, h: 20 };
 }
 
+/** Panel box of the help/legend overlay; its footer anchors the tutorial button. */
+const HELP_PANEL: Rect = { x: 128, y: 20, w: 704, h: 560 };
+
+// The rail header row carries two affordances side by side. They exist as taps,
+// not only as keys: a phone has no Esc and no ? to press, so a touch player
+// would otherwise have no way out of a level and no way into the help.
+const HEADER_ROW = { y: 74, h: 20, gap: 8 } as const;
+const HEADER_BTN_W = (RAIL_W - 24 - HEADER_ROW.gap) / 2;
+
 /** "Back to menu" affordance, tucked under the rail header (also the Esc key). */
 export function layoutMenuButton(): Rect {
-  return { x: 12, y: 74, w: RAIL_W - 24, h: 20 };
+  return { x: 12, y: HEADER_ROW.y, w: HEADER_BTN_W, h: HEADER_ROW.h };
+}
+
+/** Help/legend affordance, beside the menu button (also the ? / H keys). */
+export function layoutHelpButton(): Rect {
+  return { x: 12 + HEADER_BTN_W + HEADER_ROW.gap, y: HEADER_ROW.y, w: HEADER_BTN_W, h: HEADER_ROW.h };
+}
+
+/** "How to play" affordance inside the help overlay (also the T key). */
+export function layoutTutorialButton(): Rect {
+  return { x: VIEW_W / 2 - 96, y: HELP_PANEL.y + HELP_PANEL.h - 58, w: 192, h: 30 };
 }
 
 // --- small canvas helpers ------------------------------------------------------
@@ -351,37 +370,73 @@ function drawWorkArea(ctx: Ctx, game: Game, mouse: Point, time: number, flowTime
   const tick = displayTick(game);
   drawEdges(ctx, game, tick, flowTime);
   drawWirePreview(ctx, game, mouse);
+  drawCarryOrigin(ctx, game);
   drawNodes(ctx, game, tick, time, flowTime);
   if (game.mode === 'running' && game.paused) drawPausedOverlay(ctx);
+  if (game.carryId) drawCarryHint(ctx, game);
   if (game.flash) drawFlash(ctx, game.flash);
 
   ctx.restore();
 }
 
 /**
- * Rejected-action feedback, as a chip sitting above the hint. It lives here
- * rather than on the HUD status line because that line is clipped to the gap
- * before the buttons (~33 characters) — short enough to cut "ingress is a single
- * entry point — route it through a load-balancer to fan out" down to its first
- * clause, losing the very instruction the player needs.
+ * A centred, bordered one-liner over the board. Chips live here rather than on
+ * the HUD status line because that line is clipped to the gap before the buttons
+ * (~33 characters) — short enough to cut "ingress is a single entry point — route
+ * it through a load-balancer to fan out" down to its first clause, losing the
+ * very instruction the player needs.
  */
-function drawFlash(ctx: Ctx, message: string): void {
+function drawChip(ctx: Ctx, message: string, y: number, accent: string): void {
   const padX = 14;
   ctx.font = font(12, 600);
   const w = Math.min(ctx.measureText(message).width + padX * 2, VIEW_W - WORK_LEFT - 32);
   const h = 26;
   const x = WORK_LEFT + (VIEW_W - WORK_LEFT - w) / 2;
-  const y = WORK_BOTTOM - 68;
 
   ctx.save();
   ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
   rrect(ctx, { x, y, w, h }, 7);
   ctx.fill();
-  ctx.strokeStyle = palette.amber;
+  ctx.strokeStyle = accent;
   ctx.lineWidth = 1.2;
   rrect(ctx, { x, y, w, h }, 7);
   ctx.stroke();
-  label(ctx, message, x + w / 2, y + 17, palette.amber, 12, 600, 'center');
+  label(ctx, message, x + w / 2, y + 17, accent, 12, 600, 'center');
+  ctx.restore();
+}
+
+/** Rejected-action feedback, as an amber chip sitting above the hint. */
+function drawFlash(ctx: Ctx, message: string): void {
+  drawChip(ctx, message, WORK_BOTTOM - 68, palette.amber);
+}
+
+/**
+ * The prompt for the second half of a move. Without it the two-step gesture is
+ * invisible on a touch screen: a finger leaves no cursor for the node to follow,
+ * so the board would look unchanged between picking a node up and putting it down.
+ */
+function drawCarryHint(ctx: Ctx, game: Game): void {
+  const node = game.nodes.find((n) => n.id === game.carryId);
+  if (!node) return;
+  drawChip(ctx, `:: carrying ${NODE_SPECS[node.kind].label} — press where it should go · Esc cancels`, WORK_TOP + 56, palette.bone);
+}
+
+/**
+ * Faint outline of the slot a carried node came from. Drawn only once the node
+ * has actually travelled, so a picked-up-but-unmoved node is not ringed twice.
+ */
+function drawCarryOrigin(ctx: Ctx, game: Game): void {
+  const from = game.carryOrigin;
+  if (!game.carryId || !from) return;
+  const node = game.nodes.find((n) => n.id === game.carryId);
+  if (!node || Math.hypot(node.x - from.x, node.y - from.y) < 6) return;
+  ctx.save();
+  ctx.strokeStyle = tint.charcoalDim;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 5]);
+  rrect(ctx, { x: from.x - NODE_W / 2, y: from.y - NODE_H / 2, w: NODE_W, h: NODE_H }, 7);
+  ctx.stroke();
+  ctx.setLineDash([]);
   ctx.restore();
 }
 
@@ -515,11 +570,13 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
     const isWireFrom = game.wireFromId === node.id;
     const isHover = game.hoverNodeId === node.id;
     const isSelected = game.selectedNodeId === node.id;
+    const isCarried = game.carryId === node.id;
 
     // a crashed replica (downed) reads as a red alert, above the amber "overloaded".
     let border: string = tint.greenDim;
     if (downed) border = tint.red;
     else if (overloaded) border = palette.amber;
+    else if (isCarried) border = palette.bone;
     else if (isWireFrom) border = palette.green;
     else if (isSelected) border = palette.bone;
     else if (isHover) border = palette.green;
@@ -555,11 +612,33 @@ function drawNodes(ctx: Ctx, game: Game, tick: SimTick | null, time: number, flo
       ctx.restore();
     }
 
+    // "in hand": a pulsing dashed halo and a drop shadow lift the node off the
+    // board, so it is obvious that the next click puts it down somewhere.
+    if (isCarried) {
+      const pulse = 0.5 + 0.5 * Math.sin(time / 140);
+      ctx.save();
+      ctx.globalAlpha = 0.35 + 0.35 * pulse;
+      ctx.strokeStyle = palette.bone;
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([5, 4]);
+      rrect(ctx, { x: r.x - 5, y: r.y - 5, w: r.w + 10, h: r.h + 10 }, 10);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    ctx.save();
+    if (isCarried) {
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 5;
+    }
     ctx.fillStyle = tint.node;
     rrect(ctx, r, 7);
     ctx.fill();
+    ctx.restore();
     ctx.strokeStyle = border;
-    ctx.lineWidth = isWireFrom || isSelected || overloaded || downed ? 2 : 1.3;
+    ctx.lineWidth = isWireFrom || isSelected || isCarried || overloaded || downed ? 2 : 1.3;
     rrect(ctx, r, 7);
     ctx.stroke();
 
@@ -610,15 +689,10 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
     label(ctx, truncate(ctx, parts.join(' '), RAIL_W - 36, 11, 500), 26, 64, tint.boneDim, 11, 500);
   }
 
-  // back-to-menu affordance (also the Esc key)
-  const menuBtn = layoutMenuButton();
-  ctx.strokeStyle = tint.charcoalDim;
-  ctx.lineWidth = 1;
-  rrect(ctx, menuBtn, 5);
-  ctx.stroke();
-  label(ctx, '<', menuBtn.x + 10, menuBtn.y + 14, palette.green, 12, 700);
-  label(ctx, 'menu', menuBtn.x + 26, menuBtn.y + 14, tint.boneDim, 12, 500);
-  label(ctx, 'Esc', menuBtn.x + menuBtn.w - 10, menuBtn.y + 14, tint.greenDim, 11, 600, 'right');
+  // header row: leave the level (Esc) and open the help/legend (?). Both are
+  // tappable, because a touch player has neither key.
+  drawChromeRow(ctx, layoutMenuButton(), '<', 'menu', 'Esc');
+  drawChromeRow(ctx, layoutHelpButton(), '?', 'help', 'H');
 
   const items = layoutRail(game);
   const firstComp = items.find((i) => isNodeKind(i.tool));
@@ -660,15 +734,26 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   }
 
   // sound toggle, pinned to the rail footer
-  const mb = layoutMuteButton();
   const on = !isMuted();
+  drawChromeRow(ctx, layoutMuteButton(), on ? '[*]' : '[ ]', on ? 'sound on' : 'sound off', 'M', on ? palette.green : tint.boneDim, 38);
+}
+
+/**
+ * One of the rail's small chrome rows: outline, glyph, label, and the keyboard
+ * shortcut that does the same thing. `textX` is the label's offset from the row's
+ * left edge — wide enough to clear a three-character glyph like the mute `[*]`.
+ */
+function drawChromeRow(
+  ctx: Ctx, r: Rect, glyph: string, text: string, key: string,
+  glyphColor: string = palette.green, textX = 21,
+): void {
   ctx.strokeStyle = tint.charcoalDim;
   ctx.lineWidth = 1;
-  rrect(ctx, mb, 5);
+  rrect(ctx, r, 5);
   ctx.stroke();
-  label(ctx, on ? '[*]' : '[ ]', mb.x + 10, mb.y + 14, on ? palette.green : tint.boneDim, 12, 700);
-  label(ctx, on ? 'sound on' : 'sound off', mb.x + 38, mb.y + 14, tint.boneDim, 12, 500);
-  label(ctx, 'M', mb.x + mb.w - 10, mb.y + 14, tint.greenDim, 11, 600, 'right');
+  label(ctx, glyph, r.x + 8, r.y + 14, glyphColor, 12, 700);
+  label(ctx, text, r.x + textX, r.y + 14, tint.boneDim, 12, 500);
+  label(ctx, key, r.x + r.w - 7, r.y + 14, tint.greenDim, 10, 600, 'right');
 }
 
 // --- hud -----------------------------------------------------------------------
@@ -856,16 +941,19 @@ function drawResultBanner(ctx: Ctx, game: Game, time: number): void {
 
 // --- help / legend overlay ------------------------------------------------------
 
+// Worded for a finger as much as for a mouse: "press" covers both, and the move
+// row leads with the two-step gesture because that is the one a touch screen can
+// actually perform.
 const HELP_CONTROLS: Array<[string, string]> = [
-  ['component', 'pick from the rail, then click the board to place it'],
-  ['wire  ->', 'click a source node, then a target, to connect them'],
-  ['move  ::', 'drag a node to reposition it'],
-  ['delete  x', 'click a node or edge to remove it'],
+  ['component', 'pick from the rail, then press the board to place it'],
+  ['wire  ->', 'press a source node, then a target, to connect them'],
+  ['move  ::', 'press a node, then press where it goes (or drag it)'],
+  ['delete  x', 'press a node or edge to remove it'],
   ['Run / Enter', 'simulate the traffic run'],
   ['Space / P', 'pause or resume a run'],
   ['Skip >>', 'jump straight to the end of a run'],
   ['M', 'mute / unmute all sound'],
-  ['Esc', 'clear a selection, or return to the level menu'],
+  ['Esc', 'put a carried node back, clear a selection, or leave the level'],
   ['?  or  H', 'toggle this help'],
 ];
 
@@ -880,7 +968,7 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
   ctx.fillStyle = 'rgba(11, 16, 32, 0.92)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-  const panel: Rect = { x: 128, y: 28, w: 704, h: 544 };
+  const panel = HELP_PANEL;
   ctx.fillStyle = tint.panel;
   rrect(ctx, panel, 12);
   ctx.fill();
@@ -917,7 +1005,16 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
     cy = Math.max(cy + 22, end + 12);
   }
 
-  label(ctx, 'press ? or Esc to close', panel.x + panel.w / 2, panel.y + panel.h - 18, tint.greenDim, 12, 500, 'center');
+  // "how to play" as a real button: T is unreachable without a keyboard, so this
+  // is the only route back into the tutorial on a phone.
+  const tut = layoutTutorialButton();
+  ctx.strokeStyle = palette.green;
+  ctx.lineWidth = 1.3;
+  rrect(ctx, tut, 8);
+  ctx.stroke();
+  label(ctx, 'how to play  (T)', tut.x + tut.w / 2, tut.y + tut.h / 2 + 5, palette.green, 13, 700, 'center');
+
+  label(ctx, 'press anywhere else to close  ·  ? or Esc', panel.x + panel.w / 2, panel.y + panel.h - 10, tint.greenDim, 11, 500, 'center');
   ctx.restore();
 }
 
@@ -927,12 +1024,23 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
 // any time with T. Distinct from the ? help/legend (which is the full controls +
 // per-level node reference): this is the goal-and-core-loop onboarding, in big
 // readable text. Cosmetic only — it never touches the deterministic simulation.
+// Each body is kept near two wrapped lines: five steps only fit above the Start
+// button at that density, and TUTORIAL_FITS in render.smoke.test.ts guards it.
 const TUTORIAL_STEPS: Array<[string, string]> = [
-  ['1 · GOAL', "You're the on-call SRE. Each region hands you a failing system — compose a topology that survives the incoming traffic inside its error budget and its resource budget."],
-  ['2 · BUILD', 'Pick a component from the left rail, then click the board to place it. Choose the wire tool, click a source node then a target to connect them. All traffic starts at ingress.'],
-  ['3 · RUN', 'Press Run (or Enter) to simulate the traffic. Watch the requests flow: an overloaded node glows amber, and a crashed replica glows red and drops its share.'],
-  ['4 · SCORE', 'Keep drops within the error budget to PASS; hit the par cost for GOLD. Every run is also graded on three scores — cost, cycles (waiting in a queue) and coverage (behind a CI gate).'],
+  ['1 · GOAL', "You're the on-call SRE. Each region hands you a failing system — build a topology that survives its traffic inside the error budget."],
+  ['2 · BUILD', 'Pick a component from the rail, then press the board to place it. With the wire tool, press a source node then a target to link them.'],
+  ['3 · MOVE', 'With the move tool, press a node to pick it up, then press where it should go. Dragging works too, and Esc puts it back.'],
+  ['4 · RUN', 'Press Run to simulate the traffic. An overloaded node glows amber; a crashed replica glows red and drops its share.'],
+  ['5 · SCORE', 'Keep drops inside the error budget to PASS, and hit the par cost for GOLD. Runs are graded on cost, cycles and coverage.'],
 ];
+
+/** Panel box of the tutorial overlay; its footer anchors the Start button. */
+const TUTORIAL_PANEL: Rect = { x: 150, y: 30, w: 660, h: 540 };
+
+/** Start / Skip affordance at the foot of the tutorial (any press also closes it). */
+export function layoutTutorialStartButton(): Rect {
+  return { x: VIEW_W / 2 - 92, y: TUTORIAL_PANEL.y + TUTORIAL_PANEL.h - 76, w: 184, h: 38 };
+}
 
 /** Full-screen tutorial. Any click / Esc / T dismisses it (handled by the input
  *  layer); this only draws. Reads no game state, so it is safe over menu or play. */
@@ -941,7 +1049,7 @@ export function drawTutorial(ctx: Ctx): void {
   ctx.fillStyle = 'rgba(11, 16, 32, 0.94)';
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-  const panel: Rect = { x: 150, y: 36, w: 660, h: 528 };
+  const panel = TUTORIAL_PANEL;
   ctx.fillStyle = tint.panel;
   rrect(ctx, panel, 12);
   ctx.fill();
@@ -955,15 +1063,15 @@ export function drawTutorial(ctx: Ctx): void {
   label(ctx, 'HOW TO PLAY', px, panel.y + 46, palette.green, 22, 700);
   label(ctx, 'crash-loop — keep a cloud running under load', px + 200, panel.y + 46, tint.boneDim, 13, 500);
 
-  let cy = panel.y + 96;
+  let cy = panel.y + 92;
   for (const [head, body] of TUTORIAL_STEPS) {
     label(ctx, head, px, cy, palette.amber, 15, 700);
     const end = labelWrapped(ctx, body, px, cy + 21, maxW, tint.boneDim, 14, 500, 19);
-    cy = end + 26;
+    cy = end + 28;
   }
 
-  // Start / Skip button (purely an affordance — any click closes the tutorial).
-  const btn: Rect = { x: VIEW_W / 2 - 92, y: 486, w: 184, h: 38 };
+  // Start / Skip button (purely an affordance — any press closes the tutorial).
+  const btn = layoutTutorialStartButton();
   ctx.fillStyle = palette.green;
   rrect(ctx, btn, 8);
   ctx.fill();
@@ -973,7 +1081,7 @@ export function drawTutorial(ctx: Ctx): void {
   ctx.stroke();
   label(ctx, 'Start >', btn.x + btn.w / 2, btn.y + btn.h / 2 + 5, palette.navy, 15, 700, 'center');
 
-  label(ctx, 'Skip (Esc) · reopen any time with T · press ? in a level for the full controls', VIEW_W / 2, panel.y + panel.h - 14, tint.greenDim, 12, 500, 'center');
+  label(ctx, 'press anywhere to skip · reopen from ? help · Esc also closes', VIEW_W / 2, panel.y + panel.h - 16, tint.greenDim, 12, 500, 'center');
   ctx.restore();
 }
 
@@ -1096,7 +1204,7 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
   // boot prompt with a blinking block caret — only after the log finishes
   if (elapsed > linesStart + bootLines.length * lineGap) {
     const py = 452;
-    const prompt = 'press ENTER to boot';
+    const prompt = 'press anywhere to boot';
     label(ctx, prompt, lx, py, palette.green, 16, 700);
     ctx.font = font(16, 700);
     ctx.textAlign = 'left';
@@ -1105,7 +1213,7 @@ export function drawTitle(ctx: Ctx, imgs: GameImages, time: number, cleared = 0,
       ctx.fillStyle = palette.green;
       ctx.fillRect(lx + promptW, py - 13, 10, 16);
     }
-    label(ctx, 'or click anywhere', lx, py + 22, tint.greenDim, 13, 500);
+    label(ctx, 'tap the board, or hit ENTER', lx, py + 22, tint.greenDim, 13, 500);
   }
 
   // saved progress, once the boot log has printed
@@ -1226,7 +1334,7 @@ export function drawMenu(
   } else {
     label(ctx, 'crash-loop', VIEW_W / 2, 82, palette.green, 34, 700, 'center');
   }
-  label(ctx, 'select a region — click a card or press 1–' + levels.length + '   ·   press T for tutorial', VIEW_W / 2, 162, tint.boneDim, 14, 500, 'center');
+  label(ctx, 'select a region — press a card, or the keys 1–' + levels.length + '   ·   T for the tutorial', VIEW_W / 2, 162, tint.boneDim, 14, 500, 'center');
 
   const cards = layoutLevelSelect(levels.length);
   for (const c of cards) {

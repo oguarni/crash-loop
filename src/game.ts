@@ -2,7 +2,7 @@ import type { Budgets, Edge, GameNode, LevelSpec, NodeKind, SimResult } from './
 import type { LevelRecord } from './progress';
 import { NODE_SPECS } from './sim/nodes';
 import { inertCacheIds, simulate } from './sim/engine';
-import { NODE_H, NODE_W, type Point, distToSegment, pointInNode, workBounds } from './layout';
+import { NODE_H, NODE_W, type Point, clampToWork, distToSegment, pointInNode, workBounds } from './layout';
 
 export type Tool = 'move' | 'wire' | 'delete' | NodeKind;
 export type Mode = 'edit' | 'running' | 'result';
@@ -48,10 +48,19 @@ export class Game {
   // transient interaction state
   selectedNodeId: string | null = null;
   wireFromId: string | null = null;
-  draggingId: string | null = null;
-  dragOffX = 0;
-  dragOffY = 0;
   hoverNodeId: string | null = null;
+
+  // The move tool's gesture state: `carryId` is the node currently in hand.
+  // Repositioning is a two-step pick-up / put-down, not strictly a press-drag,
+  // because a press-drag is the one gesture a touch screen cannot express — a
+  // finger reports no hover, and a held press is claimed by the page's own
+  // scrolling. A press that travels still reads as a drag (mouse and finger
+  // alike); a press that stays put leaves the node in hand until the next click
+  // places it. Both paths funnel through beginCarry / moveCarried / dropCarried.
+  carryId: string | null = null;
+  carryOffX = 0; // pointer-to-centre offset, so a grab never snaps the node
+  carryOffY = 0;
+  carryOrigin: Point | null = null; // where the carry began, so Esc can undo it
   flash: string | null = null; // transient one-line message (e.g. a rejected edge)
 
   // simulation playback
@@ -79,8 +88,9 @@ export class Game {
     this.mode = 'edit';
     this.selectedNodeId = null;
     this.wireFromId = null;
-    this.draggingId = null;
     this.hoverNodeId = null;
+    this.carryId = null;
+    this.carryOrigin = null;
     this.flash = null;
     this.sim = null;
     this.playhead = 0;
@@ -126,9 +136,83 @@ export class Game {
   // --- editing ---
 
   setTool(tool: Tool): void {
+    // Switching tools abandons a half-finished move rather than committing it:
+    // reaching for the rail is not a placement, so the node goes back.
+    this.cancelCarry();
     this.tool = tool;
     this.wireFromId = null;
     this.flash = null;
+  }
+
+  // --- moving a node (the two-step carry gesture) ---
+
+  /**
+   * Pick a node up at pointer (px, py). The grab offset is kept so the node
+   * holds its position under the pointer instead of snapping its centre there.
+   * No-op outside edit mode or for an unknown id.
+   *
+   * @example g.beginCarry(node.id, p.x, p.y); g.moveCarried(x, y); g.dropCarried();
+   */
+  beginCarry(nodeId: string, px: number, py: number): boolean {
+    if (this.mode !== 'edit') return false;
+    const node = this.nodes.find((n) => n.id === nodeId);
+    if (!node) return false;
+    this.carryId = node.id;
+    this.carryOffX = px - node.x;
+    this.carryOffY = py - node.y;
+    this.carryOrigin = { x: node.x, y: node.y };
+    this.selectedNodeId = node.id;
+    this.flash = null;
+    return true;
+  }
+
+  /**
+   * Track the node in hand to pointer (px, py), clamped so its whole box stays
+   * inside the work area. Returns true when the node actually moved.
+   */
+  moveCarried(px: number, py: number): boolean {
+    const node = this.carriedNode();
+    if (!node) return false;
+    const pos = clampToWork(px - this.carryOffX, py - this.carryOffY);
+    const moved = pos.x !== node.x || pos.y !== node.y;
+    node.x = pos.x;
+    node.y = pos.y;
+    return moved;
+  }
+
+  /**
+   * Put the node down where it stands, nudging it to the nearest free slot if it
+   * landed on another. Returns false when nothing was in hand.
+   */
+  dropCarried(): boolean {
+    if (!this.carryId) return false;
+    this.resolveOverlap(this.carryId);
+    this.carryId = null;
+    this.carryOrigin = null;
+    return true;
+  }
+
+  /** Abandon the move, returning the node to where it was picked up (Esc). */
+  cancelCarry(): boolean {
+    if (!this.carryId) return false;
+    const node = this.carriedNode();
+    if (node && this.carryOrigin) {
+      node.x = this.carryOrigin.x;
+      node.y = this.carryOrigin.y;
+    }
+    this.carryId = null;
+    this.carryOrigin = null;
+    return true;
+  }
+
+  /** The node in hand, or null. Self-heals if it was deleted mid-carry. */
+  private carriedNode(): GameNode | null {
+    if (!this.carryId) return null;
+    const node = this.nodes.find((n) => n.id === this.carryId);
+    if (node) return node;
+    this.carryId = null;
+    this.carryOrigin = null;
+    return null;
   }
 
   placeNode(kind: NodeKind, x: number, y: number): GameNode | null {
@@ -197,6 +281,10 @@ export class Game {
     this.nodes = this.nodes.filter((n) => n.id !== id);
     this.edges = this.edges.filter((e) => e.from !== id && e.to !== id);
     if (this.selectedNodeId === id) this.selectedNodeId = null;
+    if (this.carryId === id) {
+      this.carryId = null;
+      this.carryOrigin = null;
+    }
   }
 
   deleteEdge(id: string): void {
@@ -274,11 +362,13 @@ export class Game {
     if (this.mode !== 'edit') return;
     // Drop every editing affordance: none of them mean anything during a run, and
     // a selection that outlives one leaves Esc clearing an invisible highlight
-    // instead of returning to the menu.
+    // instead of returning to the menu. A node still in hand is *committed*
+    // (Enter can start a run mid-carry), so the player keeps the position they
+    // chose — with overlaps resolved, exactly as a put-down would.
     this.flash = null;
     this.selectedNodeId = null;
     this.wireFromId = null;
-    this.draggingId = null;
+    this.dropCarried();
     const res = simulate(this.nodes, this.edges, this.level.traffic, {
       requireBeforeSinks: this.level.requireBeforeSinks,
       chaos: this.level.chaos,

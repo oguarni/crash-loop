@@ -65,19 +65,44 @@ longer have to clear levels in sequence to reach the later ones.
 
 ### Controls
 
+Every action is a **press** — one input model for mouse, finger and pen alike, via
+pointer events. Keys are shortcuts, never the only way in.
+
 | Action  | How |
 |---------|-----|
-| Place   | Click a component in the left rail, then click an empty spot in the work area |
-| Wire    | Select **wire**, click the source node, then the target node |
-| Move    | Select **move**, drag a node — a node dropped on another is nudged to the nearest free slot |
-| Delete  | Select **delete**, click a node or an edge |
+| Place   | Press a component in the left rail, then press an empty spot in the work area |
+| Wire    | Select **wire**, press the source node, then the target node |
+| Move    | Select **move**, press a node to **pick it up**, then press where it should go. Holding and dragging works too. A node put down on another is nudged to the nearest free slot |
+| Delete  | Select **delete**, press a node or an edge |
 | Run     | **Run >** (or `Enter`) — simulate the traffic profile and score it |
 | Pause   | **Pause** (or `Space` / `P`) freezes a running sim; **Resume** continues |
-| Help    | `?` or `H` toggles an in-game help / legend overlay (controls + the node kinds this level uses) |
+| Help    | The rail's **`? help`** affordance (or `?` / `H`) opens the help / legend overlay — controls, the node kinds this level uses, and a way back into the tutorial |
 | Mute    | `M` (or the rail's mute affordance) toggles all audio, including the ambient hum |
-| Cancel / back | `Esc` cancels an in-progress wire or clears a selection; a clean `Esc` returns to the level menu |
+| Cancel / back | `Esc` puts a carried node back, cancels an in-progress wire, or clears a selection; a clean `Esc` returns to the level menu. Pressing the rail or HUD also abandons a carry |
 
 Clear a level and a **Next >** button appears on the result banner to advance.
+
+### Touch and small screens
+
+The board is a fixed 960×600 logical surface that CSS scales to fit, so the same
+build runs on a phone:
+
+- **The move tool is a two-step gesture, not a drag.** A press-and-drag is the one
+  gesture a touch screen cannot express — a finger reports no hover, and the
+  browser claims a held press for scrolling — so a press picks the node up and the
+  next press puts it down. Dragging still works for anyone who prefers it, and
+  both paths share one state machine (`beginCarry` / `moveCarried` / `dropCarried`).
+- **The chrome is tappable, not keyboard-only.** The rail carries `< menu` and
+  `? help` rows, and the help overlay carries a **how to play** button, so a device
+  without `Esc`, `?` or `T` can still reach every screen.
+- **`touch-action: none`** on the canvas hands every gesture inside the board to
+  the game: no page pan, no pinch zoom, no double-tap zoom, no long-press callout.
+- **Coarse pointers get padded hit-boxes** (`inflate()` in `src/layout.ts`), each
+  pad kept under half the gap to its neighbour so a fat-finger tap can never land
+  on the wrong row — asserted in `src/render.smoke.test.ts`.
+- **Phone-sized viewports go full-bleed** (the hint line and frame are dropped so
+  every pixel goes to the board), and a **portrait nudge** asks for landscape,
+  where a 16:10 board is actually readable. It is dismissible.
 
 ## Scoring & progress
 
@@ -268,7 +293,7 @@ but breaches the cost par.
 src/
   types.ts          shared domain types (incl. ChaosSpec)
   palette.ts        canonical Three-Way Merge palette
-  layout.ts         geometry constants + hit-testing helpers
+  layout.ts         geometry constants + hit-testing helpers (incl. touch inflate)
   sim/
     nodes.ts        per-kind specs (cost, capacity, fan-out, cache hit-rate, queue buffer)
     rng.ts          deterministic seeded PRNG (mulberry32) for chaos
@@ -285,7 +310,8 @@ src/
   game.ts           board state, editing rules, run/playback (framework-agnostic)
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
   render.ts         all canvas drawing + shared hit-region layouts
-  main.ts           DOM wiring, input, the playback loop
+  mobile.ts         touch host wiring (gesture guards, portrait nudge)
+  main.ts           DOM wiring, pointer input, the playback loop
 scripts/
   sim-check.ts      headless deterministic verification harness (npm run test:sim)
 ```
@@ -306,7 +332,10 @@ scripts/
   Requests still held when the run ends are counted as dropped, so conservation
   (`served + dropped === arrived`) always holds and a solution must drain in time.
 - `game.ts` holds no rendering or DOM code, so the rules are unit-testable and
-  the renderer is replaceable.
+  the renderer is replaceable. That includes the move gesture: `beginCarry` /
+  `moveCarried` / `dropCarried` / `cancelCarry` live in the model, so `main.ts`
+  only has to decide *when* a press means pick-up, drop, or drag — and the
+  gesture is covered by unit tests rather than by clicking around a browser.
 
 ## Roadmap
 
@@ -319,8 +348,11 @@ All six roadmap node kinds are live: `ingress`, `load-balancer`, `service`,
   gated behind clearing levels in order.
 - **Multi-axis scoring** — cost, cycles, and coverage surfaced side by side on
   the result banner and rail.
-- **In-game help / legend** — a `?` / `H` overlay with the controls and the node
-  kinds each level uses.
+- **In-game help / legend** — a `?` / `H` overlay (or the rail's `? help` row)
+  with the controls and the node kinds each level uses.
+- **Touch support** — pointer-event input, the two-step move gesture, tappable
+  chrome, padded coarse-pointer hit-boxes, a full-bleed phone layout and a
+  portrait nudge. The same build plays on a phone in landscape.
 - **Terminal polish** — CRT vignette + contrast pass and a low ambient hum;
   IBM Plex Mono is now self-hosted, so a live demo needs no network at all.
 
