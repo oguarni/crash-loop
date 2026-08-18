@@ -7,7 +7,7 @@
 // RecordingCtx is a named fake 2D context: it collects every draw with its
 // bounding box and measures monospace text the way IBM Plex Mono does (0.6em
 // advance per character), so the numbers here match what a browser produces.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { Game } from './game';
 import { LEVELS } from './levels';
 import { L01 } from './levels/L01';
@@ -19,15 +19,17 @@ import {
   drawTitle,
   drawTutorial,
   layoutButtons,
+  layoutFooterRows,
   layoutHelpButton,
   layoutLevelSelect,
   layoutMenuButton,
-  layoutMuteButton,
+  layoutMenuFullscreenButton,
   layoutRail,
   layoutTutorialButton,
   layoutTutorialStartButton,
 } from './render';
 import { RAIL_W, VIEW_H, VIEW_W, WORK_BOTTOM, inflate, type Rect } from './layout';
+import { fullscreenSupported } from './fullscreen';
 import type { GameImages } from './images';
 
 const MONO_ADVANCE = 0.6; // em per character, IBM Plex Mono
@@ -127,6 +129,26 @@ function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+/**
+ * jsdom implements no Fullscreen API, so the rail and the menu would draw their
+ * *narrower* layouts here — the ones with nothing to collide with. Plant the two
+ * members the detection looks for, and assert it agrees, so this suite always
+ * guards the tight split-footer geometry rather than passing vacuously.
+ */
+beforeAll(() => {
+  Object.defineProperty(document, 'fullscreenEnabled', { value: true, configurable: true });
+  Object.defineProperty(document.documentElement, 'requestFullscreen', {
+    value: () => Promise.resolve(),
+    configurable: true,
+  });
+  expect(fullscreenSupported()).toBe(true);
+});
+
+/** Every text run drawn inside a chrome row, in the order it was drawn. */
+function textsIn(c: CanvasRenderingContext2D, r: Rect): DrawnText[] {
+  return recorder(c).texts.filter((t) => t.y > r.y && t.y <= r.y + r.h + 4 && span(t).left >= r.x - 1 && span(t).left < r.x + r.w);
+}
+
 describe('every screen draws without throwing', () => {
   it('draws the board for every level, in edit / running / result', () => {
     for (const level of LEVELS) {
@@ -185,14 +207,26 @@ describe('overlay text stays inside its panel', () => {
 });
 
 describe('hit regions are reachable and disjoint', () => {
-  it('keeps the rail rows clear of the mute row, for every level', () => {
+  it('keeps the rail rows clear of the footer toggles, for every level', () => {
     for (const level of LEVELS) {
-      const mute = layoutMuteButton();
+      const footer = layoutFooterRows(true);
       for (const item of layoutRail(new Game(level))) {
-        expect(item.rect.y + item.rect.h).toBeLessThan(mute.y);
+        expect(item.rect.y + item.rect.h).toBeLessThan(footer.mute.y);
         expect(item.rect.x + item.rect.w).toBeLessThanOrEqual(RAIL_W);
       }
     }
+  });
+
+  it('splits the footer into two rows only where fullscreen exists', () => {
+    const alone = layoutFooterRows(false);
+    expect(alone.fullscreen).toBe(null);
+    expect(alone.mute.x + alone.mute.w).toBe(RAIL_W - 12);
+
+    const split = layoutFooterRows(true);
+    expect(split.fullscreen).not.toBe(null);
+    expect(overlaps(split.mute, split.fullscreen!)).toBe(false);
+    expect(split.mute.y).toBe(alone.mute.y); // the sound row never moves
+    expect(split.fullscreen!.x + split.fullscreen!.w).toBe(RAIL_W - 12);
   });
 
   it('keeps the menu and help rows side by side inside the rail', () => {
@@ -209,7 +243,7 @@ describe('hit regions are reachable and disjoint', () => {
   const SLACK = {
     rail: { x: 3, y: 3 },
     header: { x: 3, y: 9 },
-    mute: { x: 3, y: 4 },
+    footer: { x: 3, y: 4 },
     button: { x: 5, y: 5 },
   };
 
@@ -222,18 +256,25 @@ describe('hit regions are reachable and disjoint', () => {
         expect(overlaps(rail[i], rail[j])).toBe(false);
       }
     }
+    const footer = layoutFooterRows(true);
     const chrome = [
       inflate(layoutMenuButton(), SLACK.header.x, SLACK.header.y),
       inflate(layoutHelpButton(), SLACK.header.x, SLACK.header.y),
-      inflate(layoutMuteButton(), SLACK.mute.x, SLACK.mute.y),
+      inflate(footer.mute, SLACK.footer.x, SLACK.footer.y),
+      inflate(footer.fullscreen!, SLACK.footer.x, SLACK.footer.y),
     ];
-    expect(overlaps(chrome[0], chrome[1])).toBe(false);
-    expect(overlaps(chrome[1], chrome[2])).toBe(false);
+    for (let i = 0; i < chrome.length; i++) {
+      for (let j = i + 1; j < chrome.length; j++) {
+        expect(overlaps(chrome[i], chrome[j])).toBe(false);
+      }
+      expect(chrome[i].x + chrome[i].w).toBeLessThanOrEqual(RAIL_W);
+    }
     for (const r of rail) {
       for (const c of chrome) expect(overlaps(r, c)).toBe(false);
     }
-    // the mute row must not reach into the HUD, where the Run button lives
+    // neither footer row may reach into the HUD, where the Run button lives
     expect(chrome[2].y + chrome[2].h).toBeLessThanOrEqual(WORK_BOTTOM);
+    expect(chrome[3].y + chrome[3].h).toBeLessThanOrEqual(WORK_BOTTOM);
 
     const buttons = layoutButtons(g).map((b) => inflate(b.rect, SLACK.button.x, SLACK.button.y));
     for (let i = 0; i < buttons.length; i++) {
@@ -242,6 +283,15 @@ describe('hit regions are reachable and disjoint', () => {
       }
       expect(buttons[i].x + buttons[i].w).toBeLessThanOrEqual(VIEW_W);
       expect(buttons[i].y).toBeGreaterThan(WORK_BOTTOM - 6); // stays out of the board
+    }
+  });
+
+  it('keeps the menu fullscreen row clear of the level cards', () => {
+    const row = inflate(layoutMenuFullscreenButton(), SLACK.button.x, SLACK.button.y);
+    expect(row.x).toBeGreaterThanOrEqual(0);
+    expect(row.y).toBeGreaterThanOrEqual(0);
+    for (const card of layoutLevelSelect(LEVELS.length)) {
+      expect(overlaps(row, inflate(card.rect, SLACK.button.x, SLACK.button.y))).toBe(false);
     }
   });
 
@@ -254,5 +304,46 @@ describe('hit regions are reachable and disjoint', () => {
       expect(cards[i].x).toBeGreaterThanOrEqual(0);
       expect(cards[i].x + cards[i].w).toBeLessThanOrEqual(VIEW_W);
     }
+  });
+});
+
+// The chrome rows are the tightest type on the board: a glyph, a label and a key
+// hint sharing a box under 100px wide, which the split footer made tighter still.
+// Nothing about that is visible until it is wrong on a phone, so it is measured.
+describe('chrome rows hold their own text', () => {
+  function assertRowFits(c: CanvasRenderingContext2D, r: Rect, name: string): void {
+    const texts = textsIn(c, r);
+    expect(texts.length, `${name} draws glyph + label + key`).toBe(3);
+    for (const t of texts) {
+      const { left, right } = span(t);
+      expect(left, `${name}: "${t.text}" starts inside the row`).toBeGreaterThanOrEqual(r.x);
+      expect(right, `${name}: "${t.text}" ends inside the row`).toBeLessThanOrEqual(r.x + r.w);
+    }
+    for (let i = 0; i < texts.length; i++) {
+      for (let j = i + 1; j < texts.length; j++) {
+        const a = span(texts[i]);
+        const b = span(texts[j]);
+        expect(a.right <= b.left || b.right <= a.left, `${name}: "${texts[i].text}" clears "${texts[j].text}"`).toBe(true);
+      }
+    }
+  }
+
+  it('fits the rail header and both footer toggles, muted or not', () => {
+    // L07 has the fullest rail; the sound row is drawn from live audio state, so
+    // both spellings of its label have to fit the narrower split row.
+    const g = new Game(L07);
+    const footer = layoutFooterRows(true);
+    const c = ctx();
+    draw(c, g, { x: 400, y: 300 }, 1000, NO_IMAGES, 1000);
+    assertRowFits(c, layoutMenuButton(), 'menu');
+    assertRowFits(c, layoutHelpButton(), 'help');
+    assertRowFits(c, footer.mute, 'sound');
+    assertRowFits(c, footer.fullscreen!, 'fullscreen');
+  });
+
+  it('fits the menu screen fullscreen row', () => {
+    const c = ctx();
+    drawMenu(c, NO_IMAGES, LEVELS, LEVELS.map(() => null), { x: 480, y: 300 }, 3);
+    assertRowFits(c, layoutMenuFullscreenButton(), 'menu fullscreen');
   });
 });

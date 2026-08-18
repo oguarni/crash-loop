@@ -6,6 +6,7 @@ import { inertCacheIds } from './sim/engine';
 import { palette, tint } from './palette';
 import { type GameImages, ready } from './images';
 import { isMuted } from './audio';
+import { fullscreenSupported, isFullscreen } from './fullscreen';
 import {
   HUD_H,
   NODE_H,
@@ -118,9 +119,40 @@ export function layoutButtons(game: Game): Button[] {
   });
 }
 
-/** Sound on/off toggle, in the rail's free space above the HUD (also the M key). */
-export function layoutMuteButton(): Rect {
-  return { x: 12, y: WORK_BOTTOM - 30, w: RAIL_W - 24, h: 20 };
+// The rail footer carries the device toggles — the settings that belong to the
+// screen the game is on, not to the level. Sound holds the whole width on its
+// own; where the browser has the Fullscreen API the row splits in two, sized so
+// each label still clears its own key hint.
+const FOOTER_ROW = { y: WORK_BOTTOM - 30, h: 20, gap: 8, soundW: 92 } as const;
+
+export interface FooterRows {
+  mute: Rect;
+  /** null where the browser has no Fullscreen API — see fullscreenSupported(). */
+  fullscreen: Rect | null;
+}
+
+/**
+ * Sound (also the M key) and, where the device offers one, fullscreen (also F),
+ * in the rail's free space above the HUD. The support flag is a parameter rather
+ * than a lookup so the geometry of both layouts can be asserted off-device.
+ *
+ * @example const { mute, fullscreen } = layoutFooterRows(fullscreenSupported())
+ */
+export function layoutFooterRows(withFullscreen: boolean): FooterRows {
+  const full = RAIL_W - 24;
+  const { y, h, gap, soundW } = FOOTER_ROW;
+  if (!withFullscreen) return { mute: { x: 12, y, w: full, h }, fullscreen: null };
+  return {
+    mute: { x: 12, y, w: soundW, h },
+    fullscreen: { x: 12 + soundW + gap, y, w: full - soundW - gap, h },
+  };
+}
+
+/** Fullscreen affordance on the level-select screen, in its free top-left corner
+ *  — a phone already in landscape never sees the portrait nudge that offers the
+ *  other way in, and the rail's own toggle is a level away. */
+export function layoutMenuFullscreenButton(): Rect {
+  return { x: 24, y: 24, w: 140, h: 20 };
 }
 
 /** Panel box of the help/legend overlay; its footer anchors the tutorial button. */
@@ -733,9 +765,22 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
     }
   }
 
-  // sound toggle, pinned to the rail footer
+  // device toggles, pinned to the rail footer
+  const rows = layoutFooterRows(fullscreenSupported());
   const on = !isMuted();
-  drawChromeRow(ctx, layoutMuteButton(), on ? '[*]' : '[ ]', on ? 'sound on' : 'sound off', 'M', on ? palette.green : tint.boneDim, 38);
+  // The label drops "on" / "off" once it shares the row: the checkbox glyph and
+  // its colour already carry the state, and the word will not fit beside a
+  // second row.
+  const sound = rows.fullscreen ? 'sound' : on ? 'sound on' : 'sound off';
+  drawChromeRow(ctx, rows.mute, on ? '[*]' : '[ ]', sound, 'M', on ? palette.green : tint.boneDim, 38);
+  // The fullscreen glyph is a pair of arrows rather than the sound row's
+  // checkbox: it reads as the action it performs — <> pushes the board out to
+  // the screen edges, >< pulls it back — and two characters is all the split
+  // row has room for beside its label and its key.
+  if (rows.fullscreen) {
+    const full = isFullscreen();
+    drawChromeRow(ctx, rows.fullscreen, full ? '><' : '<>', 'full', 'F', full ? palette.green : tint.boneDim, 30);
+  }
 }
 
 /**
@@ -953,7 +998,8 @@ const HELP_CONTROLS: Array<[string, string]> = [
   ['Space / P', 'pause or resume a run'],
   ['Skip >>', 'jump straight to the end of a run'],
   ['M', 'mute / unmute all sound'],
-  ['Esc', 'put a carried node back, clear a selection, or leave the level'],
+  ['F', 'fullscreen — and landscape, on a phone that can lock it'],
+  ['Esc', 'unwind one layer: carried node, selection, fullscreen, level'],
   ['?  or  H', 'toggle this help'],
 ];
 
@@ -984,10 +1030,12 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
   // controls
   label(ctx, 'CONTROLS', px, panel.y + 70, tint.boneDim, 12, 700);
   let cy = panel.y + 94;
+  // 21px pitch, not 22: the list grew a row and the tallest level's legend below
+  // it still has to clear the footer button.
   for (const [key, desc] of HELP_CONTROLS) {
     label(ctx, key, px, cy, palette.bone, 13, 700);
     label(ctx, desc, px + 150, cy, tint.boneDim, 13, 500);
-    cy += 22;
+    cy += 21;
   }
 
   // node legend — only the kinds this level actually uses
@@ -995,7 +1043,7 @@ export function drawHelpOverlay(ctx: Ctx, game: Game): void {
   for (const k of [...game.level.initialNodes.map((n) => n.kind), ...game.level.palette]) {
     if (!kinds.includes(k)) kinds.push(k);
   }
-  cy += 14;
+  cy += 10;
   label(ctx, 'COMPONENTS IN THIS LEVEL', px, cy, tint.boneDim, 12, 700);
   cy += 24;
   for (const kind of kinds) {
@@ -1335,6 +1383,14 @@ export function drawMenu(
     label(ctx, 'crash-loop', VIEW_W / 2, 82, palette.green, 34, 700, 'center');
   }
   label(ctx, 'select a region — press a card, or the keys 1–' + levels.length + '   ·   T for the tutorial', VIEW_W / 2, 162, tint.boneDim, 14, 500, 'center');
+
+  // Fullscreen, offered before a level rather than only inside one: a phone held
+  // in landscape from the start never meets the portrait nudge, and this is the
+  // last screen with room to spell the word out.
+  if (fullscreenSupported()) {
+    const full = isFullscreen();
+    drawChromeRow(ctx, layoutMenuFullscreenButton(), full ? '><' : '<>', 'fullscreen', 'F', full ? palette.green : tint.boneDim, 30);
+  }
 
   const cards = layoutLevelSelect(levels.length);
   for (const c of cards) {

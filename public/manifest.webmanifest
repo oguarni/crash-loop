@@ -1,0 +1,16 @@
+{
+  "name": "crash-loop",
+  "short_name": "crash-loop",
+  "description": "A 2D infrastructure & automation puzzle — compose a cloud topology that survives simulated traffic within an error budget.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#0B1020",
+  "theme_color": "#0B1020",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon-180.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

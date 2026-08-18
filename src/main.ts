@@ -8,10 +8,11 @@ import {
   drawTutorial,
   isNodeKind,
   layoutButtons,
+  layoutFooterRows,
   layoutHelpButton,
   layoutLevelSelect,
   layoutMenuButton,
-  layoutMuteButton,
+  layoutMenuFullscreenButton,
   layoutRail,
   layoutTutorialButton,
 } from './render';
@@ -31,6 +32,7 @@ import {
   type Rect,
 } from './layout';
 import { installBoardGestureGuards, installRotateNudge } from './mobile';
+import { exitFullscreen, fullscreenSupported, isFullscreen, toggleFullscreen } from './fullscreen';
 
 const canvas = document.getElementById('screen') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('canvas #screen not found');
@@ -170,7 +172,7 @@ const DRAG_SLOP = 6;
 const TOUCH_SLACK = {
   rail: { x: 3, y: 3 }, // rail rows sit 6px apart
   header: { x: 3, y: 9 }, // menu | help share one row 8px apart, but stand alone vertically
-  mute: { x: 3, y: 4 }, // 8px under the last rail row, 10px over the HUD divider
+  footer: { x: 3, y: 4 }, // sound | full sit 8px apart; 8px under the last rail row, 10px over the HUD
   button: { x: 5, y: 5 }, // HUD buttons sit 10px apart; menu cards 16px and 24px
 } as const;
 const EDGE_SLACK = 7; // extra tolerance when tapping a wire (a radius, not a rect)
@@ -179,6 +181,19 @@ const NO_SLACK = { x: 0, y: 0 } as const;
 function hit(p: Point, r: Rect, kind: keyof typeof TOUCH_SLACK): boolean {
   const s = coarse ? TOUCH_SLACK[kind] : NO_SLACK;
   return pointInRect(p.x, p.y, inflate(r, s.x, s.y));
+}
+
+// Fullscreen has to be requested from an event carrying transient user
+// activation, and the two pointer types disagree on which event that is: HTML
+// activates a mouse on pointerdown but a finger only on pointerup, and the
+// preventDefault() on our pointerdown suppresses the compatibility click that
+// would otherwise carry it. So a press on the toggle acts immediately for a
+// mouse and parks the intent for a finger, which onUp then spends.
+let fullscreenPending = false;
+
+function pressFullscreenToggle(): void {
+  if (coarse) fullscreenPending = true;
+  else void toggleFullscreen();
 }
 
 function handleButton(id: ButtonId): void {
@@ -207,6 +222,10 @@ function onDown(p: Point): void {
     return;
   }
   if (screen === 'menu') {
+    if (fullscreenSupported() && hit(p, layoutMenuFullscreenButton(), 'button')) {
+      pressFullscreenToggle();
+      return;
+    }
     const card = layoutLevelSelect(LEVELS.length).find((c) => hit(p, c.rect, 'button'));
     if (card) startLevel(card.index);
     return;
@@ -237,8 +256,13 @@ function onDown(p: Point): void {
       audio.sfx.tool();
       return;
     }
-    if (hit(p, layoutMuteButton(), 'mute')) {
+    const footer = layoutFooterRows(fullscreenSupported());
+    if (hit(p, footer.mute, 'footer')) {
       audio.toggleMuted();
+      return;
+    }
+    if (footer.fullscreen && hit(p, footer.fullscreen, 'footer')) {
+      pressFullscreenToggle();
       return;
     }
     const item = layoutRail(game).find((i) => hit(p, i.rect, 'rail'));
@@ -357,6 +381,12 @@ function onUp(e: PointerEvent): void {
   }
   // A finger leaves no cursor behind, so its hover highlight would stick forever.
   if (coarse) game.hoverNodeId = null;
+  // The tap that landed on the fullscreen toggle is only now carrying the user
+  // activation the request needs (see pressFullscreenToggle).
+  if (fullscreenPending) {
+    fullscreenPending = false;
+    void toggleFullscreen();
+  }
   pressTravelled = false;
   pressOrigin = null;
 }
@@ -368,6 +398,7 @@ function onCancel(e: PointerEvent): void {
   // Only an in-flight drag is rolled back; a node parked in hand by a tap stays
   // there, because its second tap is still to come.
   if (pressTravelled) game.cancelCarry();
+  fullscreenPending = false; // the gesture that asked for it never completed
   pressTravelled = false;
   pressOrigin = null;
 }
@@ -407,6 +438,7 @@ canvas.addEventListener('pointerdown', (e) => {
   activePointerId = e.pointerId;
   pressOrigin = toLogical(e);
   pressTravelled = false;
+  fullscreenPending = false;
   // Capture keeps a drag alive when the pointer leaves the canvas, so a node
   // dragged toward the edge does not freeze halfway.
   try {
@@ -424,6 +456,12 @@ canvas.addEventListener('pointermove', (e) => {
 window.addEventListener('pointerup', onUp);
 window.addEventListener('pointercancel', onCancel);
 window.addEventListener('keydown', (e) => {
+  // F works before the game does: the hint line under the board advertises it
+  // from the boot screen on, and filling the screen is never a gameplay action.
+  if (e.key === 'f' || e.key === 'F') {
+    void toggleFullscreen();
+    return;
+  }
   if (screen === 'boot') {
     if (e.key === 'Enter' || e.key === ' ' || e.key === 't' || e.key === 'T') {
       e.preventDefault();
@@ -463,12 +501,18 @@ window.addEventListener('keydown', (e) => {
     audio.toggleMuted();
   } else if (e.key === 'Escape') {
     // Unwind one layer at a time: a node in hand goes back where it came from,
-    // then a pending wire/selection clears, and only a "clean" Esc leaves the level.
+    // then a pending wire/selection clears, then fullscreen, and only a "clean"
+    // Esc leaves the level. Fullscreen belongs in that order because Esc is also
+    // the browser's own exit key: without this layer, one press would drop the
+    // window *and* throw away the topology being built, since re-entering a
+    // level starts it fresh.
     if (game.cancelCarry()) {
       /* the carried node sprang back — that was this Esc's job */
     } else if (game.wireFromId || game.selectedNodeId) {
       game.wireFromId = null;
       game.selectedNodeId = null;
+    } else if (isFullscreen()) {
+      void exitFullscreen();
     } else {
       openMenu();
     }

@@ -78,7 +78,8 @@ pointer events. Keys are shortcuts, never the only way in.
 | Pause   | **Pause** (or `Space` / `P`) freezes a running sim; **Resume** continues |
 | Help    | The rail's **`? help`** affordance (or `?` / `H`) opens the help / legend overlay — controls, the node kinds this level uses, and a way back into the tutorial |
 | Mute    | `M` (or the rail's mute affordance) toggles all audio, including the ambient hum |
-| Cancel / back | `Esc` puts a carried node back, cancels an in-progress wire, or clears a selection; a clean `Esc` returns to the level menu. Pressing the rail or HUD also abandons a carry |
+| Fullscreen | `F` (or the rail's `<> full` row, or the menu's `<> fullscreen` row) fills the screen and asks the device for landscape |
+| Cancel / back | `Esc` unwinds one layer at a time: a carried node goes back, then a pending wire / selection clears, then fullscreen, and only a clean `Esc` returns to the level menu. Pressing the rail or HUD also abandons a carry |
 
 Clear a level and a **Next >** button appears on the result banner to advance.
 
@@ -103,6 +104,24 @@ build runs on a phone:
 - **Phone-sized viewports go full-bleed** (the hint line and frame are dropped so
   every pixel goes to the board), and a **portrait nudge** asks for landscape,
   where a 16:10 board is actually readable. It is dismissible.
+- **Fullscreen, with a landscape lock.** Browser chrome comes straight out of a
+  fixed-size board, so `F` — or the rail's `<> full` row, the menu's
+  `<> fullscreen` row, or the portrait nudge's own button — hands that space back
+  and asks the device for landscape. The lock is the part that matters: a browser
+  honours one only for a fullscreen document, so a phone whose rotation is locked
+  to portrait, which "rotate your device" cannot help at all, is turned by this
+  and by nothing else. Everything is best-effort and degrades quietly — where
+  there is no Fullscreen API the control is not drawn rather than offered dead.
+- **A tap fires the toggle on release, not on press.** Transient user activation,
+  which `requestFullscreen()` requires, arrives on `pointerdown` for a mouse but
+  only on `pointerup` for a finger — and the board's `preventDefault()` suppresses
+  the compatibility click that would otherwise carry it. So the press parks the
+  intent and the release spends it (`src/main.ts`).
+- **iPhone Safari has no Fullscreen API at all** (it lives on `<video>` only), so
+  the route there is an installed launch: `public/manifest.webmanifest` declares
+  `display: fullscreen` and `orientation: landscape`, and the `apple-*` meta tags
+  say the same to the iOS versions that read no manifest. Added to the home
+  screen, the game opens with no browser chrome.
 
 ## Scoring & progress
 
@@ -311,6 +330,7 @@ src/
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
   render.ts         all canvas drawing + shared hit-region layouts
   mobile.ts         touch host wiring (gesture guards, portrait nudge)
+  fullscreen.ts     Fullscreen API + landscape lock, guarded for every browser
   main.ts           DOM wiring, pointer input, the playback loop
 scripts/
   sim-check.ts      headless deterministic verification harness (npm run test:sim)
@@ -353,6 +373,9 @@ All six roadmap node kinds are live: `ingress`, `load-balancer`, `service`,
 - **Touch support** — pointer-event input, the two-step move gesture, tappable
   chrome, padded coarse-pointer hit-boxes, a full-bleed phone layout and a
   portrait nudge. The same build plays on a phone in landscape.
+- **Fullscreen on mobile** — an `F` / tappable toggle that fills the screen and
+  locks landscape, offered from the menu, the rail and the portrait nudge, plus
+  an installable manifest for iPhone Safari, which has no Fullscreen API.
 - **Terminal polish** — CRT vignette + contrast pass and a low ambient hum;
   IBM Plex Mono is now self-hosted, so a live demo needs no network at all.
 
