@@ -200,6 +200,33 @@
         background: #0b1020;
       }
 
+      /* Full-page sheet, shown on demand rather than by a media query: the
+         install help, which is the only fullscreen route a browser without the
+         Fullscreen API has. Above the portrait nudge, which can be behind it.
+         Toggled by the `hidden` attribute — hence :not([hidden]) rather than a
+         class, so the attribute alone decides and the two cannot disagree. */
+      .sheet {
+        display: none;
+      }
+      .sheet:not([hidden]) {
+        display: flex;
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(11, 16, 32, 0.97);
+        text-align: center;
+      }
+      /* The steps themselves, called out from the paragraph above them. */
+      .card-steps {
+        font-size: 13px;
+        line-height: 1.9;
+        color: #7cffb2;
+        margin: 0 0 22px;
+      }
+
       /* Portrait nudge. A 16:10 board in portrait is under half the width it
          wants, so the type shrinks below readable. Landscape is one rotation
          away; the overlay is dismissible for anyone who wants to play anyway. */
@@ -298,6 +325,31 @@
           </button>
           <button id="rotate-dismiss" class="rotate-dismiss" type="button">
             play in portrait anyway
+          </button>
+        </div>
+      </div>
+    </div>
+    <!-- The fullscreen route for a browser that has no Fullscreen API to offer —
+         iPhone Safari, which keeps it for <video> alone. Opened by the same
+         controls that would toggle fullscreen anywhere else, so the affordance
+         exists on every phone rather than silently vanishing on one of them. -->
+    <div id="install" class="sheet" hidden>
+      <div class="rotate-card">
+        <div class="rotate-glyph">[ + ]</div>
+        <p class="rotate-title">ADD TO HOME SCREEN</p>
+        <p class="rotate-sub">
+          This browser has no fullscreen control to give — on iPhone, Safari
+          keeps fullscreen for video alone. Installed instead, crash-loop opens
+          with no browser chrome at all, in landscape.
+        </p>
+        <p class="card-steps">
+          tap <strong>Share</strong> &#x2191;<br />
+          then <strong>Add to Home Screen</strong><br />
+          then open crash-loop from its icon
+        </p>
+        <div class="rotate-actions">
+          <button id="install-dismiss" class="rotate-dismiss" type="button">
+            got it
           </button>
         </div>
       </div>

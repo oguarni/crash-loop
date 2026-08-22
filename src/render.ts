@@ -6,7 +6,7 @@ import { inertCacheIds } from './sim/engine';
 import { palette, tint } from './palette';
 import { type GameImages, ready } from './images';
 import { isMuted } from './audio';
-import { fullscreenSupported, isFullscreen } from './fullscreen';
+import { fullscreenOffered, fullscreenRoute, isFullscreen } from './fullscreen';
 import {
   HUD_H,
   NODE_H,
@@ -766,7 +766,7 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   }
 
   // device toggles, pinned to the rail footer
-  const rows = layoutFooterRows(fullscreenSupported());
+  const rows = layoutFooterRows(fullscreenOffered());
   const on = !isMuted();
   // The label drops "on" / "off" once it shares the row: the checkbox glyph and
   // its colour already carry the state, and the word will not fit beside a
@@ -779,7 +779,10 @@ function drawRail(ctx: Ctx, game: Game, imgs: GameImages): void {
   // row has room for beside its label and its key.
   if (rows.fullscreen) {
     const full = isFullscreen();
-    drawChromeRow(ctx, rows.fullscreen, full ? '><' : '<>', 'full', 'F', full ? palette.green : tint.boneDim, 30);
+    // No key hint where F cannot toggle anything: on the install route the row
+    // opens the "add to home screen" sheet, and a phone has no F to press.
+    const key = fullscreenRoute() === 'api' ? 'F' : '';
+    drawChromeRow(ctx, rows.fullscreen, full ? '><' : '<>', 'full', key, full ? palette.green : tint.boneDim, 30);
   }
 }
 
@@ -1387,9 +1390,10 @@ export function drawMenu(
   // Fullscreen, offered before a level rather than only inside one: a phone held
   // in landscape from the start never meets the portrait nudge, and this is the
   // last screen with room to spell the word out.
-  if (fullscreenSupported()) {
+  if (fullscreenOffered()) {
     const full = isFullscreen();
-    drawChromeRow(ctx, layoutMenuFullscreenButton(), full ? '><' : '<>', 'fullscreen', 'F', full ? palette.green : tint.boneDim, 30);
+    const key = fullscreenRoute() === 'api' ? 'F' : '';
+    drawChromeRow(ctx, layoutMenuFullscreenButton(), full ? '><' : '<>', 'fullscreen', key, full ? palette.green : tint.boneDim, 30);
   }
 
   const cards = layoutLevelSelect(levels.length);

@@ -31,8 +31,16 @@ import {
   type Point,
   type Rect,
 } from './layout';
-import { installBoardGestureGuards, installRotateNudge } from './mobile';
-import { exitFullscreen, fullscreenSupported, isFullscreen, toggleFullscreen } from './fullscreen';
+import { installBoardGestureGuards, installFullscreenHelp, installRotateNudge, showFullscreenHelp } from './mobile';
+import {
+  enterFullscreen,
+  exitFullscreen,
+  fullscreenOffered,
+  fullscreenRoute,
+  isFullscreen,
+  shouldAutoFullscreen,
+  toggleFullscreen,
+} from './fullscreen';
 
 const canvas = document.getElementById('screen') as HTMLCanvasElement | null;
 if (!canvas) throw new Error('canvas #screen not found');
@@ -141,6 +149,7 @@ function startLevel(i: number): void {
 canvas.style.cursor = 'pointer';
 installBoardGestureGuards(canvas);
 installRotateNudge();
+installFullscreenHelp();
 
 function toLogical(e: PointerEvent): Point {
   const rect = canvas!.getBoundingClientRect();
@@ -191,7 +200,34 @@ function hit(p: Point, r: Rect, kind: keyof typeof TOUCH_SLACK): boolean {
 // mouse and parks the intent for a finger, which onUp then spends.
 let fullscreenPending = false;
 
+// Fullscreen on a phone without being asked for it, because a phone is where
+// the cost of not having it is highest: browser chrome is subtracted from a
+// fixed 960×600 board before a single pixel is drawn, and what is left has to
+// carry 11px type. The first touch is the moment to take it back — that tap is
+// already carrying the user activation the request needs, and spending it there
+// costs the player nothing they would otherwise have done.
+//
+// Once, and never again if they leave. A player who exits fullscreen has said
+// what they want, and a game that grabs the screen back on their next tap is
+// arguing with them; the fullscreenchange listener below disarms this for good.
+let autoFullscreenArmed = true;
+
+/** Take the screen on the first touch of the session — see above. This owns only
+ *  the *when*; whether there is anything worth taking is shouldAutoFullscreen(). */
+function maybeAutoFullscreen(): void {
+  if (!autoFullscreenArmed || !coarse) return;
+  autoFullscreenArmed = false; // one touch spends it, whatever the outcome
+  if (shouldAutoFullscreen()) void enterFullscreen();
+}
+
 function pressFullscreenToggle(): void {
+  // The install route opens a page overlay rather than requesting anything, so
+  // it has no user activation to husband and can act on the press either way.
+  if (fullscreenRoute() === 'install') {
+    showFullscreenHelp();
+    return;
+  }
+  autoFullscreenArmed = false; // asked for by hand: never surprise them later
   if (coarse) fullscreenPending = true;
   else void toggleFullscreen();
 }
@@ -222,7 +258,7 @@ function onDown(p: Point): void {
     return;
   }
   if (screen === 'menu') {
-    if (fullscreenSupported() && hit(p, layoutMenuFullscreenButton(), 'button')) {
+    if (fullscreenOffered() && hit(p, layoutMenuFullscreenButton(), 'button')) {
       pressFullscreenToggle();
       return;
     }
@@ -256,7 +292,7 @@ function onDown(p: Point): void {
       audio.sfx.tool();
       return;
     }
-    const footer = layoutFooterRows(fullscreenSupported());
+    const footer = layoutFooterRows(fullscreenOffered());
     if (hit(p, footer.mute, 'footer')) {
       audio.toggleMuted();
       return;
@@ -387,6 +423,7 @@ function onUp(e: PointerEvent): void {
     fullscreenPending = false;
     void toggleFullscreen();
   }
+  maybeAutoFullscreen(); // a no-op once anything else has spent it
   pressTravelled = false;
   pressOrigin = null;
 }
@@ -455,6 +492,14 @@ canvas.addEventListener('pointermove', (e) => {
 });
 window.addEventListener('pointerup', onUp);
 window.addEventListener('pointercancel', onCancel);
+// Leaving fullscreen is a decision, however it was made — the toggle, Esc, a
+// swipe down, the system back gesture — and it retires the automatic entry for
+// the rest of the page session. Both spellings, since Safari fires only its own.
+for (const type of ['fullscreenchange', 'webkitfullscreenchange']) {
+  document.addEventListener(type, () => {
+    if (!isFullscreen()) autoFullscreenArmed = false;
+  });
+}
 window.addEventListener('keydown', (e) => {
   // F works before the game does: the hint line under the board advertises it
   // from the boot screen on, and filling the screen is never a gameplay action.

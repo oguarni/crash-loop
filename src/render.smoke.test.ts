@@ -29,7 +29,7 @@ import {
   layoutTutorialStartButton,
 } from './render';
 import { RAIL_W, VIEW_H, VIEW_W, WORK_BOTTOM, inflate, type Rect } from './layout';
-import { fullscreenSupported } from './fullscreen';
+import { fullscreenRoute } from './fullscreen';
 import type { GameImages } from './images';
 
 const MONO_ADVANCE = 0.6; // em per character, IBM Plex Mono
@@ -132,8 +132,9 @@ function overlaps(a: Rect, b: Rect): boolean {
 /**
  * jsdom implements no Fullscreen API, so the rail and the menu would draw their
  * *narrower* layouts here — the ones with nothing to collide with. Plant the two
- * members the detection looks for, and assert it agrees, so this suite always
- * guards the tight split-footer geometry rather than passing vacuously.
+ * members the detection looks for, and assert the route agrees, so this suite
+ * always guards the tight split-footer geometry (and the row that still carries
+ * a key hint) rather than passing vacuously.
  */
 beforeAll(() => {
   Object.defineProperty(document, 'fullscreenEnabled', { value: true, configurable: true });
@@ -141,7 +142,7 @@ beforeAll(() => {
     value: () => Promise.resolve(),
     configurable: true,
   });
-  expect(fullscreenSupported()).toBe(true);
+  expect(fullscreenRoute()).toBe('api');
 });
 
 /** Every text run drawn inside a chrome row, in the order it was drawn. */

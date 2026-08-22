@@ -110,8 +110,13 @@ build runs on a phone:
   and asks the device for landscape. The lock is the part that matters: a browser
   honours one only for a fullscreen document, so a phone whose rotation is locked
   to portrait, which "rotate your device" cannot help at all, is turned by this
-  and by nothing else. Everything is best-effort and degrades quietly — where
-  there is no Fullscreen API the control is not drawn rather than offered dead.
+  and by nothing else. Everything is best-effort and degrades quietly.
+- **A phone takes the screen on its first touch, without being asked.** That is
+  where the cost of browser chrome is highest and where a control is hardest to
+  find, so the tap that leaves the boot screen — already carrying the user
+  activation the request needs — spends it on fullscreen too. Once only, and
+  never again once the player leaves fullscreen by any route: a game that grabs
+  the screen back on the next tap is arguing with them (`src/main.ts`).
 - **A tap fires the toggle on release, not on press.** Transient user activation,
   which `requestFullscreen()` requires, arrives on `pointerdown` for a mouse but
   only on `pointerup` for a finger — and the board's `preventDefault()` suppresses
@@ -121,7 +126,11 @@ build runs on a phone:
   the route there is an installed launch: `public/manifest.webmanifest` declares
   `display: fullscreen` and `orientation: landscape`, and the `apple-*` meta tags
   say the same to the iOS versions that read no manifest. Added to the home
-  screen, the game opens with no browser chrome.
+  screen, the game opens with no browser chrome. The controls stay drawn on that
+  phone and open an "add to home screen" sheet instead of toggling, because a
+  player who cannot find a fullscreen control reads it as broken, not as absent —
+  `fullscreenRoute()` picks between the two, and answers `none` only for a
+  desktop browser without the API or a launch that is already chrome-free.
 
 ## Scoring & progress
 
@@ -329,8 +338,8 @@ src/
   game.ts           board state, editing rules, run/playback (framework-agnostic)
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
   render.ts         all canvas drawing + shared hit-region layouts
-  mobile.ts         touch host wiring (gesture guards, portrait nudge)
-  fullscreen.ts     Fullscreen API + landscape lock, guarded for every browser
+  mobile.ts         touch host wiring (gesture guards, portrait nudge, install sheet)
+  fullscreen.ts     Fullscreen API + landscape lock + route detection, guarded
   main.ts           DOM wiring, pointer input, the playback loop
 scripts/
   sim-check.ts      headless deterministic verification harness (npm run test:sim)
@@ -373,9 +382,11 @@ All six roadmap node kinds are live: `ingress`, `load-balancer`, `service`,
 - **Touch support** — pointer-event input, the two-step move gesture, tappable
   chrome, padded coarse-pointer hit-boxes, a full-bleed phone layout and a
   portrait nudge. The same build plays on a phone in landscape.
-- **Fullscreen on mobile** — an `F` / tappable toggle that fills the screen and
-  locks landscape, offered from the menu, the rail and the portrait nudge, plus
-  an installable manifest for iPhone Safari, which has no Fullscreen API.
+- **Fullscreen on mobile** — entered automatically on a phone's first touch, and
+  an `F` / tappable toggle that fills the screen and locks landscape, offered from
+  the menu, the rail and the portrait nudge. Where the browser has no Fullscreen
+  API (iPhone Safari) those controls explain the installable-manifest route
+  instead of disappearing.
 - **Terminal polish** — CRT vignette + contrast pass and a low ambient hum;
   IBM Plex Mono is now self-hosted, so a live demo needs no network at all.
 

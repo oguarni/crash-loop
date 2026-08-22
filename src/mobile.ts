@@ -2,7 +2,7 @@
 // game logic: the board owns its gestures, and a phone held upright gets nudged
 // into landscape where the fixed 16:10 surface is actually readable.
 
-import { enterFullscreen, fullscreenSupported } from './fullscreen';
+import { enterFullscreen, fullscreenRoute } from './fullscreen';
 
 /**
  * Stop the browser from claiming gestures that belong to the board. `touch-action:
@@ -25,6 +25,36 @@ export function installBoardGestureGuards(canvas: HTMLCanvasElement): void {
 }
 
 /**
+ * Show the "add to home screen" sheet — the fullscreen route for a browser that
+ * has no Fullscreen API to offer. Every fullscreen control on the page routes
+ * here instead of toggling when `fullscreenRoute()` says `install`, so a phone
+ * whose browser cannot do it still gets told how it is done.
+ *
+ * @example if (fullscreenRoute() === 'install') showFullscreenHelp()
+ */
+export function showFullscreenHelp(): void {
+  const sheet = document.getElementById('install');
+  if (sheet) sheet.hidden = false;
+}
+
+/** Wire the install sheet's single answer. Safe to call when it is absent. */
+export function installFullscreenHelp(): void {
+  const sheet = document.getElementById('install');
+  if (!sheet) return;
+  // Anywhere on the sheet closes it, the button included: it carries no choice,
+  // only an explanation, so there is nothing a stray tap could get wrong.
+  //
+  // On pointerdown, not click, because the tap that *opens* the sheet is still in
+  // flight when it appears. A touch's compatibility click is hit-tested when it
+  // is finally dispatched, by which time this overlay is under the finger that
+  // asked for it — bound to click, the sheet would close itself on the way in.
+  // That pointer's own down already went to the board; only a new one lands here.
+  sheet.addEventListener('pointerdown', () => {
+    sheet.hidden = true;
+  });
+}
+
+/**
  * Wire the portrait-orientation nudge: CSS decides when to show it (small screen
  * + portrait), this only handles its two answers. Dismissal lasts for the page
  * session — a rotate/rotate-back does not bring it back.
@@ -35,20 +65,24 @@ export function installBoardGestureGuards(canvas: HTMLCanvasElement): void {
  * nothing at all — is fixed by this button and by nothing else on the page. The
  * nudge then disappears on its own, since the media query behind it stops
  * matching once the device is landscape. Where the browser has no Fullscreen API
- * (iPhone Safari) the button is dropped rather than offered dead.
+ * the button stays, pointing at the one route that device does have (the install
+ * sheet); it is dropped only on a desktop browser, which needs neither.
  */
 export function installRotateNudge(): void {
   const nudge = document.getElementById('rotate');
   if (!nudge) return;
 
   const go = document.getElementById('rotate-fullscreen');
-  if (go && fullscreenSupported()) {
+  const route = fullscreenRoute();
+  if (go && route !== 'none') {
+    if (route === 'install') go.textContent = 'how to go fullscreen';
     go.addEventListener('click', (e) => {
       e.stopPropagation(); // asking for landscape is not "play in portrait anyway"
-      void enterFullscreen();
+      if (route === 'install') showFullscreenHelp();
+      else void enterFullscreen();
     });
   } else if (go) {
-    go.hidden = true; // no API to call — leave the player one honest answer
+    go.hidden = true; // nothing to route to — leave the player one honest answer
   }
 
   nudge.addEventListener('click', () => {
