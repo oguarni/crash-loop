@@ -127,10 +127,27 @@ build runs on a phone:
   `display: fullscreen` and `orientation: landscape`, and the `apple-*` meta tags
   say the same to the iOS versions that read no manifest. Added to the home
   screen, the game opens with no browser chrome. The controls stay drawn on that
-  phone and open an "add to home screen" sheet instead of toggling, because a
-  player who cannot find a fullscreen control reads it as broken, not as absent —
+  phone and open the fullscreen guide instead of toggling, because a player who
+  cannot find a fullscreen control reads it as broken, not as absent —
   `fullscreenRoute()` picks between the two, and answers `none` only for a
   desktop browser without the API or a launch that is already chrome-free.
+- **A link opened from Instagram lands in Instagram's own browser**, and so does
+  one from Facebook, TikTok and the rest. On an iPhone that browser has no "Add to
+  Home Screen", and on Android it keeps its own bars whatever the page asks, so
+  `fullscreenRoute()` answers `browser` there: the way to fullscreen starts with
+  leaving it. `src/device.ts` reads the app from the user agent (feature
+  detection cannot say which app the page is inside).
+- **The fullscreen guide opens by itself** in an app's browser and in an iPhone
+  browser tab, because that player has no reason to look for a fullscreen
+  control. It is written per platform, and marks the step the player is on:
+  - *iPhone* — open in **Safari** (the app's `•••` menu, or the link pasted by
+    hand) → **Share → Add to Home Screen** → open crash-loop from its icon.
+  - *Android* — open in **Chrome** (the app's `⋮` menu, or the link) → tap the
+    game, which takes the screen on its own; installing is optional.
+
+  The step copy lives in `index.html`; `src/mobile.ts` picks the list, marks the
+  steps and offers a **copy link** button without the tracking query the app
+  appended. Chrome on Android needs no guide: its first touch goes fullscreen.
 
 ## Scoring & progress
 
@@ -338,8 +355,9 @@ src/
   game.ts           board state, editing rules, run/playback (framework-agnostic)
   progress.ts       persistent per-level scoring (localStorage, sim-independent)
   render.ts         all canvas drawing + shared hit-region layouts
-  mobile.ts         touch host wiring (gesture guards, portrait nudge, install sheet)
+  mobile.ts         touch host wiring (gesture guards, portrait nudge, fullscreen guide)
   fullscreen.ts     Fullscreen API + landscape lock + route detection, guarded
+  device.ts         platform and in-app browser detection from the user agent
   main.ts           DOM wiring, pointer input, the playback loop
 scripts/
   sim-check.ts      headless deterministic verification harness (npm run test:sim)
@@ -384,9 +402,10 @@ All six roadmap node kinds are live: `ingress`, `load-balancer`, `service`,
   portrait nudge. The same build plays on a phone in landscape.
 - **Fullscreen on mobile** — entered automatically on a phone's first touch, and
   an `F` / tappable toggle that fills the screen and locks landscape, offered from
-  the menu, the rail and the portrait nudge. Where the browser has no Fullscreen
-  API (iPhone Safari) those controls explain the installable-manifest route
-  instead of disappearing.
+  the menu, the rail and the portrait nudge. Where the browser cannot be asked
+  (iPhone Safari, or the browser inside Instagram and other apps) a guide opens
+  on arrival with the steps for that platform: Safari and the home screen on
+  iPhone, Chrome on Android.
 - **Terminal polish** — CRT vignette + contrast pass and a low ambient hum;
   IBM Plex Mono is now self-hosted, so a live demo needs no network at all.
 

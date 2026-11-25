@@ -200,11 +200,17 @@
         background: #0b1020;
       }
 
-      /* Full-page sheet, shown on demand rather than by a media query: the
-         install help, which is the only fullscreen route a browser without the
-         Fullscreen API has. Above the portrait nudge, which can be behind it.
-         Toggled by the `hidden` attribute — hence :not([hidden]) rather than a
-         class, so the attribute alone decides and the two cannot disagree. */
+      /* Full-page sheet, shown from script rather than by a media query: the
+         fullscreen guide, for a phone whose browser cannot simply be asked —
+         an app's built-in browser, or iPhone Safari. Above the portrait nudge,
+         which can be behind it. Toggled by the `hidden` attribute — hence
+         :not([hidden]) rather than a class, so the attribute alone decides and
+         the two cannot disagree.
+
+         It scrolls, because a phone in landscape inside an app's browser has
+         barely 300px of height for three steps. The card centres itself with
+         margin: auto rather than align-items, which would push an overflowing
+         card's top out of reach above the scroll origin. */
       .sheet {
         display: none;
       }
@@ -213,18 +219,124 @@
         position: fixed;
         inset: 0;
         z-index: 20;
-        align-items: center;
-        justify-content: center;
-        padding: 24px;
-        background: rgba(11, 16, 32, 0.97);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+          max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+        /* Opaque: the portrait nudge and the board's own text sit right behind
+           the steps, and any of it showing through reads as a second page. */
+        background: #0b1020;
         text-align: center;
       }
-      /* The steps themselves, called out from the paragraph above them. */
-      .card-steps {
+      /* Two classes, because .rotate-card's own max-width comes later. */
+      .rotate-card.guide-card {
+        margin: auto;
+        max-width: 30rem;
+      }
+      /* A phone on its side: height is what runs out, so spend the width. */
+      @media (max-height: 520px) and (min-width: 600px) {
+        .rotate-card.guide-card {
+          max-width: 46rem;
+        }
+      }
+      .guide-card .rotate-sub {
+        margin-bottom: 16px;
+      }
+      /* One list per platform; script shows the one for this phone. */
+      .guide-steps {
+        list-style: none;
+        margin: 0 0 18px;
+        padding: 0;
+        text-align: left;
         font-size: 13px;
-        line-height: 1.9;
+        line-height: 1.55;
+      }
+      .guide-steps[hidden],
+      .guide-steps [hidden] {
+        display: none;
+      }
+      .guide-steps li {
+        position: relative;
+        padding: 9px 10px 9px 44px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        color: #e8e6df;
+        opacity: 0.6;
+      }
+      .guide-steps li + li {
+        margin-top: 6px;
+      }
+      .guide-steps li::before {
+        position: absolute;
+        left: 10px;
+        top: 9px;
+        content: "[ ]";
+        color: #e8e6df;
+      }
+      .guide-steps strong {
+        color: #e8e6df;
+        font-weight: 700;
+      }
+      /* The step the player is on: the loud one, and the only one written out
+         in full. A step already behind them shrinks to its heading. */
+      .guide-steps li[data-state="now"] {
+        opacity: 1;
+        border-color: rgba(124, 255, 178, 0.45);
+        background: rgba(124, 255, 178, 0.06);
+      }
+      .guide-steps li[data-state="now"]::before {
+        content: "[>]";
         color: #7cffb2;
-        margin: 0 0 22px;
+      }
+      .guide-steps li[data-state="now"] strong {
+        color: #7cffb2;
+      }
+      .guide-steps li[data-state="done"]::before {
+        content: "[x]";
+        color: #7cffb2;
+      }
+      .guide-steps li[data-state="done"] .guide-detail {
+        display: none;
+      }
+      .guide-detail {
+        display: block;
+        margin-top: 2px;
+      }
+      /* The page's own address, to paste into the real browser when the app's
+         "open in browser" lands somewhere else. user-select: all so a single
+         long-press takes the whole link if the copy button cannot. */
+      .guide-link {
+        display: flex;
+        align-items: stretch;
+        gap: 8px;
+        margin: 0 0 18px;
+      }
+      .guide-link[hidden] {
+        display: none;
+      }
+      .guide-url {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 11px 12px;
+        border: 1px solid #3a3d45;
+        border-radius: 7px;
+        font: inherit;
+        font-size: 13px;
+        color: #e8e6df;
+        text-align: left;
+        user-select: all;
+        -webkit-user-select: all;
+      }
+      .guide-link .rotate-go {
+        flex: none;
+      }
+      @media (max-height: 520px) {
+        .guide-card .rotate-glyph {
+          display: none;
+        }
       }
 
       /* Portrait nudge. A 16:10 board in portrait is under half the width it
@@ -329,27 +441,85 @@
         </div>
       </div>
     </div>
-    <!-- The fullscreen route for a browser that has no Fullscreen API to offer —
-         iPhone Safari, which keeps it for <video> alone. Opened by the same
-         controls that would toggle fullscreen anywhere else, so the affordance
-         exists on every phone rather than silently vanishing on one of them. -->
+    <!-- The fullscreen guide, for a phone whose browser cannot simply be asked:
+         an app's built-in browser (a link tapped in Instagram), where the way
+         out is the phone's real browser, and iPhone Safari, which keeps the
+         Fullscreen API for <video> alone and goes fullscreen only from the home
+         screen. Opens by itself on arrival there, and from every fullscreen
+         control. src/mobile.ts shows one list, marks the step the player is on
+         and writes the lead line; the copy for each step lives here. -->
     <div id="install" class="sheet" hidden>
-      <div class="rotate-card">
+      <div class="rotate-card guide-card">
         <div class="rotate-glyph">[ + ]</div>
-        <p class="rotate-title">ADD TO HOME SCREEN</p>
-        <p class="rotate-sub">
-          This browser has no fullscreen control to give — on iPhone, Safari
-          keeps fullscreen for video alone. Installed instead, crash-loop opens
-          with no browser chrome at all, in landscape.
+        <p class="rotate-title">PLAY FULLSCREEN</p>
+        <p id="guide-lead" class="rotate-sub">
+          crash-loop plays best fullscreen, with no browser bars.
         </p>
-        <p class="card-steps">
-          tap <strong>Share</strong> &#x2191;<br />
-          then <strong>Add to Home Screen</strong><br />
-          then open crash-loop from its icon
-        </p>
+        <ol class="guide-steps" data-os="ios">
+          <li data-step="browser">
+            <strong>1. Open it in Safari.</strong>
+            <span class="guide-detail" data-when="in-app">
+              In <span data-app>the app</span>, tap <strong>&#x2022;&#x2022;&#x2022;</strong>
+              (usually top right), then <strong>Open in external browser</strong>
+              or <strong>Open in Safari</strong>. If another browser opens
+              instead, copy the link below into Safari.
+            </span>
+            <span class="guide-detail" data-when="other-browser">
+              Copy the link below and paste it into Safari's address bar.
+            </span>
+          </li>
+          <li data-step="install">
+            <strong>2. Add it to your Home Screen.</strong>
+            <span class="guide-detail">
+              In Safari, tap <strong>Share</strong> &#x2191; (on iOS 26 it is in
+              the <strong>&#x2022;&#x2022;&#x2022;</strong> menu next to the
+              address bar), then <strong>Add to Home Screen</strong> &mdash;
+              scroll down if it is not listed. Keep <strong>Open as Web App</strong>
+              on, if shown, and tap <strong>Add</strong>.
+            </span>
+          </li>
+          <li data-step="launch">
+            <strong>3. Open crash-loop from its new icon.</strong>
+            <span class="guide-detail">
+              It runs fullscreen, with no Safari bars. Turn the phone sideways.
+            </span>
+          </li>
+        </ol>
+        <ol class="guide-steps" data-os="android" hidden>
+          <li data-step="browser">
+            <strong>1. Open it in Chrome.</strong>
+            <span class="guide-detail" data-when="in-app">
+              In <span data-app>the app</span>, tap <strong>&#x22EE;</strong>
+              (top right), then <strong>Open in Chrome</strong> or
+              <strong>Open in browser</strong>. Or copy the link below into Chrome.
+            </span>
+            <span class="guide-detail" data-when="other-browser">
+              Copy the link below and paste it into Chrome's address bar.
+            </span>
+          </li>
+          <li data-step="launch">
+            <strong>2. Tap the game once.</strong>
+            <span class="guide-detail">
+              It fills the screen and turns to landscape by itself. If you leave
+              fullscreen, the <strong>&lt;&gt; full</strong> button brings it back.
+            </span>
+          </li>
+          <li data-step="install">
+            <strong>Optional: put it on your home screen.</strong>
+            <span class="guide-detail">
+              In Chrome, tap <strong>&#x22EE;</strong>, then
+              <strong>Add to Home screen</strong> (or <strong>Install app</strong>)
+              to start it fullscreen from an icon.
+            </span>
+          </li>
+        </ol>
+        <div class="guide-link" hidden>
+          <span id="guide-url" class="guide-url"></span>
+          <button id="guide-copy" class="rotate-go" type="button">copy link</button>
+        </div>
         <div class="rotate-actions">
           <button id="install-dismiss" class="rotate-dismiss" type="button">
-            got it
+            play here anyway
           </button>
         </div>
       </div>

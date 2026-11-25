@@ -14,6 +14,8 @@
 // activation, and the orientation lock is unsupported on the desktop. Each call
 // is guarded and reports a boolean instead.
 
+import { currentDevice } from './device';
+
 /** The prefixed corners of the Fullscreen API that Safari still needs. */
 interface FullscreenDoc extends Document {
   webkitFullscreenElement?: Element | null;
@@ -102,18 +104,27 @@ export function isStandaloneDisplay(): boolean {
  * should do when it is pressed:
  *
  * - `api`     — the Fullscreen API works here; the control is a toggle.
+ * - `browser` — an app's built-in browser (a link tapped in Instagram, Facebook,
+ *               TikTok, …). Whatever it claims about the API, it cannot add the
+ *               page to an iPhone's home screen and keeps its own bars on an
+ *               Android one, so the way to fullscreen starts with leaving it for
+ *               the phone's real browser. The control opens the guide that says so.
  * - `install` — no API, but a touch device that can install the page to its home
- *               screen, where the manifest opens it fullscreen and landscape.
- *               This is the whole of iPhone Safari, and the control is the only
- *               place the player will ever be told so.
+ *               screen, where the manifest opens it without browser chrome. This
+ *               is the whole of iPhone Safari; the control opens the same guide.
  * - `none`    — a desktop browser without the API, or a page already launched
  *               from an icon: nothing to draw, because a control that cannot act
  *               is worse than no control.
  */
-export type FullscreenRoute = 'api' | 'install' | 'none';
+export type FullscreenRoute = 'api' | 'browser' | 'install' | 'none';
 
-/** @example if (fullscreenRoute() === 'install') showFullscreenHelp() */
+/** @example if (fullscreenRoute() !== 'api') showFullscreenHelp() */
 export function fullscreenRoute(): FullscreenRoute {
+  // Checked before the API: an Android WebView may well report the API, and the
+  // bars it keeps are the in-app browser's own, which no request takes away. The
+  // standalone check comes first because an iOS home-screen launch drops the
+  // `Safari/` token just as an embedded browser does (see readDevice()).
+  if (!isStandaloneDisplay() && currentDevice().inApp !== null) return 'browser';
   if (fullscreenSupported()) return 'api';
   if (isStandaloneDisplay()) return 'none';
   // A coarse pointer is the honest test for "can this be added to a home
@@ -142,15 +153,60 @@ export function phoneSized(): boolean {
  * Whether the page should take the screen on a touch it was given for something
  * else, rather than waiting to be asked. True only on a phone-sized screen whose
  * browser can actually do it and is not already there: an installed launch has no
- * chrome left to reclaim, a desktop has room to spare, and a browser whose only
- * route is the install sheet must never raise that sheet on its own — it is an
- * answer to a question the player asked.
+ * chrome left to reclaim, and a desktop has room to spare. A browser without the
+ * API is shouldOpenGuideOnArrival()'s business, not this one's.
  *
  * The caller owns the other half of the decision: *when* to offer it (a finger,
  * once per session) and when to stop (the moment the player leaves fullscreen).
  */
 export function shouldAutoFullscreen(): boolean {
   return fullscreenRoute() === 'api' && phoneSized() && !isFullscreen() && !isStandaloneDisplay();
+}
+
+/**
+ * Whether the fullscreen guide should open by itself as the page loads, before
+ * the player has asked anything. The phone that shouldAutoFullscreen() cannot
+ * help is the one that most needs telling, and it would otherwise never be told:
+ * a player who came from an Instagram link has no reason to look for a
+ * fullscreen control, and inside that app's browser the control could not act
+ * anyway. So the guide opens on arrival in any app's built-in browser, and in an
+ * iPhone browser tab, where the home screen is the only way to full screen. An
+ * Android browser with the API needs no guide: its first touch takes the screen.
+ */
+export function shouldOpenGuideOnArrival(): boolean {
+  const route = fullscreenRoute();
+  if (route === 'browser') return true;
+  return route === 'install' && currentDevice().os === 'ios' && phoneSized();
+}
+
+/** A step of the fullscreen guide — see fullscreenGuide(). */
+export type GuideStep = 'browser' | 'install' | 'launch';
+
+/**
+ * Which guide this phone gets, and the step it is on. The two platforms take
+ * different roads to the same place, so they get different steps:
+ *
+ * - iOS:     open in Safari → Add to Home Screen → launch from the icon. The home
+ *            screen is the only fullscreen an iPhone gives a page, and Safari is
+ *            the browser that reliably puts one there.
+ * - Android: open in Chrome → tap the game, which takes the screen on its own.
+ *            Installing is an optional extra, not a step on the way.
+ *
+ * `app` names the app whose browser the player is in, when there is one, so the
+ * guide can say where its menu is.
+ *
+ * @example const { os, step } = fullscreenGuide() // { os: 'ios', step: 'browser', app: 'Instagram' }
+ */
+export function fullscreenGuide(): { os: 'ios' | 'android'; step: GuideStep; app: string | null } {
+  const device = currentDevice();
+  const app = isStandaloneDisplay() ? null : device.inApp;
+  if (device.os === 'android') {
+    return { os: 'android', step: app !== null || !fullscreenSupported() ? 'browser' : 'launch', app };
+  }
+  // iOS, and the odd touch device that is neither: the home-screen route is the
+  // one a browser without the API has, and those steps describe it.
+  const inSafari = device.os === 'ios' ? device.safari : app === null;
+  return { os: 'ios', step: app !== null || !inSafari ? 'browser' : 'install', app };
 }
 
 /** Whether the page is fullscreen right now — including an exit the player made

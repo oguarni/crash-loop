@@ -39,6 +39,7 @@ import {
   fullscreenRoute,
   isFullscreen,
   shouldAutoFullscreen,
+  shouldOpenGuideOnArrival,
   toggleFullscreen,
 } from './fullscreen';
 
@@ -150,6 +151,10 @@ canvas.style.cursor = 'pointer';
 installBoardGestureGuards(canvas);
 installRotateNudge();
 installFullscreenHelp();
+// A player who followed a link from Instagram on an iPhone lands in that app's
+// browser, where nothing on the board can make the game fullscreen. They get
+// the guide before the boot screen, not after they think to look for it.
+if (shouldOpenGuideOnArrival()) showFullscreenHelp();
 
 function toLogical(e: PointerEvent): Point {
   const rect = canvas!.getBoundingClientRect();
@@ -221,10 +226,12 @@ function maybeAutoFullscreen(): void {
 }
 
 function pressFullscreenToggle(): void {
-  // The install route opens a page overlay rather than requesting anything, so
-  // it has no user activation to husband and can act on the press either way.
-  if (fullscreenRoute() === 'install') {
-    showFullscreenHelp();
+  // Every route but the API opens the guide, a page overlay rather than a
+  // request, so it has no user activation to husband and can act on the press
+  // either way. The press is still in flight, though, and its click must not
+  // land on the guide's buttons.
+  if (fullscreenRoute() !== 'api') {
+    showFullscreenHelp({ pressInFlight: true });
     return;
   }
   autoFullscreenArmed = false; // asked for by hand: never surprise them later

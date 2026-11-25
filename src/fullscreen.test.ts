@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   enterFullscreen,
   exitFullscreen,
+  fullscreenGuide,
   fullscreenOffered,
   fullscreenRoute,
   fullscreenSupported,
@@ -9,6 +10,7 @@ import {
   isStandaloneDisplay,
   phoneSized,
   shouldAutoFullscreen,
+  shouldOpenGuideOnArrival,
   toggleFullscreen,
 } from './fullscreen';
 
@@ -223,7 +225,7 @@ describe('taking the screen unasked', () => {
     expect(shouldAutoFullscreen()).toBe(false);
   });
 
-  it('never raises the install sheet on its own', () => {
+  it('requests nothing where the install route is the only one', () => {
     plant(new FakeIosDocument());
     plantMedia(...PHONE);
     expect(fullscreenRoute()).toBe('install');
@@ -241,6 +243,100 @@ describe('taking the screen unasked', () => {
     plantMedia(...PHONE);
     await enterFullscreen();
     expect(shouldAutoFullscreen()).toBe(false);
+  });
+});
+
+/** Just enough of a user agent for device.ts to place it — device.test.ts holds
+ *  the full strings. */
+const IPHONE_SAFARI =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1';
+const IPHONE_INSTAGRAM =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22B83 Instagram 356.0.0.41.101';
+const IPHONE_CHROME =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0.6478.54 Mobile/15E148 Safari/604.1';
+const ANDROID_CHROME =
+  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+const ANDROID_INSTAGRAM =
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.6478.134 Mobile Safari/537.36 Instagram 339.0.0.33.98 Android';
+
+function plantAgent(userAgent: string, extra: Record<string, unknown> = {}): void {
+  globalScope.navigator = { userAgent, maxTouchPoints: 5, ...extra };
+}
+
+describe('a link opened inside an app', () => {
+  const PHONE = ['(max-width: 820px)', '(pointer: coarse)'];
+
+  it('routes Instagram on an iPhone to the guide, which opens by itself', () => {
+    plant(new FakeIosDocument());
+    plantMedia(...PHONE);
+    plantAgent(IPHONE_INSTAGRAM);
+    expect(fullscreenRoute()).toBe('browser');
+    expect(fullscreenOffered()).toBe(true);
+    expect(shouldOpenGuideOnArrival()).toBe(true);
+    expect(fullscreenGuide()).toEqual({ os: 'ios', step: 'browser', app: 'Instagram' });
+  });
+
+  it('routes Instagram on Android there too, even though its WebView reports the API', () => {
+    plant(new FakeDocument());
+    plantMedia(...PHONE);
+    plantAgent(ANDROID_INSTAGRAM);
+    expect(fullscreenSupported()).toBe(true);
+    expect(fullscreenRoute()).toBe('browser');
+    expect(shouldAutoFullscreen()).toBe(false); // the guide's job, not a request's
+    expect(shouldOpenGuideOnArrival()).toBe(true);
+    expect(fullscreenGuide()).toEqual({ os: 'android', step: 'browser', app: 'Instagram' });
+  });
+
+  it('takes a home-screen launch for one, not for an in-app browser', () => {
+    // An iOS web app keeps no Safari/ token either, but it is already chrome-free.
+    plant(new FakeIosDocument());
+    plantMedia(...PHONE);
+    plantAgent(IPHONE_INSTAGRAM.replace(/ Instagram.*/, ''), { standalone: true });
+    expect(fullscreenRoute()).toBe('none');
+    expect(shouldOpenGuideOnArrival()).toBe(false);
+  });
+});
+
+describe('the guide in a real browser', () => {
+  const PHONE = ['(max-width: 820px)', '(pointer: coarse)'];
+
+  it('opens by itself in iPhone Safari, on the Home Screen step', () => {
+    plant(new FakeIosDocument());
+    plantMedia(...PHONE);
+    plantAgent(IPHONE_SAFARI);
+    expect(fullscreenRoute()).toBe('install');
+    expect(shouldOpenGuideOnArrival()).toBe(true);
+    expect(fullscreenGuide()).toEqual({ os: 'ios', step: 'install', app: null });
+  });
+
+  it('sends Chrome on an iPhone to Safari first', () => {
+    plant(new FakeIosDocument());
+    plantMedia(...PHONE);
+    plantAgent(IPHONE_CHROME);
+    expect(fullscreenGuide()).toEqual({ os: 'ios', step: 'browser', app: null });
+  });
+
+  it('stays shut on an iOS screen that is not phone-sized', () => {
+    plant(new FakeIosDocument());
+    plantMedia('(pointer: coarse)');
+    plantAgent(IPHONE_SAFARI);
+    expect(shouldOpenGuideOnArrival()).toBe(false);
+  });
+
+  it('stays shut in Chrome on Android, whose first touch takes the screen', () => {
+    plant(new FakeDocument());
+    plantMedia(...PHONE);
+    plantAgent(ANDROID_CHROME);
+    expect(fullscreenRoute()).toBe('api');
+    expect(shouldOpenGuideOnArrival()).toBe(false);
+    expect(shouldAutoFullscreen()).toBe(true);
+    expect(fullscreenGuide()).toEqual({ os: 'android', step: 'launch', app: null });
+  });
+
+  it('stays shut on a desktop', () => {
+    plant(new FakeDocument());
+    plantMedia();
+    expect(shouldOpenGuideOnArrival()).toBe(false);
   });
 });
 
